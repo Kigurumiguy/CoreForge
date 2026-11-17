@@ -1,0 +1,45 @@
+name: Build Torque Voice APK
+on:
+  push:
+    branches: [torque-voice-build]
+    paths:
+      - "torque-voice/**"
+      - ".github/workflows/torque-voice-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Compile installable Android APK
+        run: gradle -p torque-voice --no-daemon --stacktrace :app:assembleDebug
+      - name: Copy installable APK
+        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.1.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TORQUE-Voice-APK
+          path: Torque-Voice-0.1.apk
+      - name: Publish direct APK download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view torque-voice-v0.1.0 >/dev/null 2>&1; then
+            gh release upload torque-voice-v0.1.0 Torque-Voice-0.1.apk --clobber
+          else
+            gh release create torque-voice-v0.1.0 Torque-Voice-0.1.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.1 — Android APK" --notes "Voice-first Android test APK. Minimal dark display, phone GPS, local memories, phone TTS voices and on-device speech recognition when supported. Lightweight scripted dialogue; no GGUF model included. No background microphone. Test before driving."
+          fi
