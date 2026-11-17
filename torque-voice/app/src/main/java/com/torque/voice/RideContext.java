@@ -22,7 +22,7 @@ final class RideContext {
 
     boolean addGuest(String rawName) {
         if (rawName == null) return false;
-        String name = rawName.trim().replaceAll("[^\\p{L}\\p{N} '\\-]", "");
+        String name = rawName.trim().replaceAll("[^\\p{L}\\p{N} '-]", "");
         if (name.isEmpty() || name.length() > 24 || guests.size() >= 4) return false;
         for (String prior : guests) if (prior.equalsIgnoreCase(name)) return true;
         guests.add(name);
