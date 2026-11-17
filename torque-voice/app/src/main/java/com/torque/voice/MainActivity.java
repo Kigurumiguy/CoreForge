@@ -52,6 +52,8 @@ public class MainActivity extends Activity implements LocationListener {
     private float pitch = 0.87f;
     private MemoryDB memory;
     private ScriptedTorque torque;
+    private final RideContext ride = new RideContext();
+    private TextView rideText;
     private SharedPreferences prefs;
     private TextView status, transcript, gpsText, voiceText;
     private Button talkButton;
@@ -138,6 +140,10 @@ public class MainActivity extends Activity implements LocationListener {
         addButton(button("■  STOP TALKING / MUTE MIC", this::stopConversation));
         addButton(button("🎤  CHOOSE TORQUE'S VOICE", this::chooseVoice));
 
+        rideText = text(ride.summary(),12,Color.rgb(110,185,255));
+        panel.addView(rideText);
+        addButton(button("PASSENGERS / WHO'S TALKING", this::showRideControls));
+
         voiceText = text("Voice: loading phone voices…",12,Color.LTGRAY);
         panel.addView(voiceText);
 
@@ -170,6 +176,7 @@ public class MainActivity extends Activity implements LocationListener {
     private void rebuildButtons() {
         makeScreen();
         refreshVoiceText();
+        refreshRideText();
         updateLocationLabel();
         refreshTalkButton();
         setStatus(active ? (speaking ? "TORQUE SPEAKING" : "MIC ON — LISTENING") : "MIC OFF — TAP TALK");
@@ -324,8 +331,14 @@ public class MainActivity extends Activity implements LocationListener {
                 if(heard.equalsIgnoreCase("stop torque")||heard.equalsIgnoreCase("mute torque")){
                     stopConversation();return;
                 }
-                String answer=torque.respond(heard,currentFix,fixAt,passenger,quiet);
-                memory.log(heard,answer);
+                String presence = ride.hearPresence(heard);
+                String answer = presence != null ? presence : torque.respond(heard,currentFix,fixAt,passenger,quiet,ride);
+                if(presence != null) refreshRideText();
+                if(ride.guestTurn() && presence == null) {
+                    // Guest turns are temporary; do not save them to the owner's history.
+                } else {
+                    memory.log(heard,answer);
+                }
                 transcript.setText("YOU: "+heard+"\n\nTORQUE: "+answer);
                 if(ttsReady) sayOnce(answer);
                 else {active=false;refreshTalkButton();setStatus("NO TTS ENGINE INSTALLED");}
@@ -383,6 +396,42 @@ public class MainActivity extends Activity implements LocationListener {
         String precision=currentFix.hasAccuracy()?" ±"+Math.round(currentFix.getAccuracy())+"m":"";
         gpsText.setText("PHONE GPS • "+speed+precision+"\n"+String.format(Locale.US,"%.5f, %.5f",currentFix.getLatitude(),currentFix.getLongitude()));
     }
+    private void refreshRideText() {
+        if (rideText != null) rideText.setText(ride.summary());
+    }
+
+    private void showRideControls() {
+        String[] choices = {"Add Dad", "Add a passenger by name", "Talk as driver (not voice-verified)",
+            "Talk as guest (not voice-verified)", "Clear all passengers"};
+        new AlertDialog.Builder(this).setTitle("Who's riding?").setItems(choices,(d,n)->{
+            if(n==0) {
+                ride.addGuest("Dad");
+                transcript.setText("Torque: Well hello, Dad! Nice to have someone civilized riding along.");
+            } else if(n==1) {
+                android.widget.EditText entry = new android.widget.EditText(this);
+                entry.setSingleLine();
+                entry.setHint("Passenger first name");
+                new AlertDialog.Builder(this).setTitle("Add a passenger")
+                    .setView(entry)
+                    .setNegativeButton("Cancel",null)
+                    .setPositiveButton("Add",(a,b)->{
+                        boolean ok=ride.addGuest(entry.getText().toString());
+                        refreshRideText();
+                        if(!ok)transcript.setText("Name wasn't accepted, or all four guest slots are filled.");
+                    }).show();
+            } else if(n==2) {
+                ride.guestTurn(false);
+            } else if(n==3) {
+                if(!ride.hasGuests()){
+                    transcript.setText("Add a passenger first. This is a manual speaking mode, not voice identification.");
+                } else ride.guestTurn(true);
+            } else if(n==4) {
+                ride.clear();
+            }
+            refreshRideText();
+        }).setNegativeButton("Done",null).show();
+    }
+
     private void showMemories(){
         List<String> facts=memory.facts();
         StringBuilder b=new StringBuilder("Built-in canon: You work at Waffle House; five years in January 2027.\n\nSaved memories:\n");
@@ -408,6 +457,8 @@ public class MainActivity extends Activity implements LocationListener {
     @Override protected void onStart(){super.onStart();foreground=true;}
     @Override protected void onStop(){
         foreground=false;stopConversation();
+        ride.clear();
+        refreshRideText();
         if(locationManager!=null)locationManager.removeUpdates(this);
         currentFix=null;fixAt=0;updateLocationLabel();
         super.onStop();
