@@ -25,6 +25,7 @@ import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -44,8 +45,10 @@ public class MainActivity extends Activity implements LocationListener {
     private Location currentFix;
     private long fixAt = 0L;
     private boolean active = false, listening = false, speaking = false, foreground = false;
-    private boolean passenger = false, quiet = false, ttsReady = false, autoContinue = true;
+    private boolean passenger = false, quiet = false, ttsReady = false;
     private long nextUtterance = 0;
+    private int recognitionFailures = 0;
+    private int listenGeneration = 0;
     private float pitch = 0.87f;
     private MemoryDB memory;
     private ScriptedTorque torque;
@@ -62,7 +65,6 @@ public class MainActivity extends Activity implements LocationListener {
         getWindow().setNavigationBarColor(Color.BLACK);
         prefs = getSharedPreferences("torque_prefs", MODE_PRIVATE);
         pitch = prefs.getFloat("pitch", 0.87f);
-        autoContinue = prefs.getBoolean("auto", true);
         passenger = prefs.getBoolean("passenger", false);
         quiet = prefs.getBoolean("quiet", false);
         memory = new MemoryDB(this);
@@ -147,10 +149,7 @@ public class MainActivity extends Activity implements LocationListener {
                    if(tts != null)tts.setPitch(pitch);refreshVoiceText();sayOnce("All right, wiseass. How's this voice?");})
                 .show();
         }));
-        addButton(button("CONVERSATION: " + (autoContinue ? "CONTINUOUS" : "TAP EACH TIME"), () -> {
-            autoContinue=!autoContinue; prefs.edit().putBoolean("auto",autoContinue).apply();
-            rebuildButtons();
-        }));
+        panel.addView(text("HANDS-FREE MODE • TAP TALK ONCE, THEN JUST SPEAK",12,Color.rgb(255,164,48)));
 
         addButton(button("MODE: " + (passenger?"PASSENGER":quiet?"QUIET":"CLASSIC TORQUE"), () -> {
             String[] modes = {"Classic Torque", "Passenger", "Quiet"};
@@ -164,7 +163,7 @@ public class MainActivity extends Activity implements LocationListener {
         addButton(button("GPS: TURN ON / REFRESH",this::startGps));
         addButton(button("MEMORIES / DELETE",this::showMemories));
 
-        TextView disclosure=text("Runs with the screen open. Mic and GPS stop when you leave. No ads, uploads, or hidden recording. On-device speech depends on your phone's installed recognition service. This lightweight version uses contextual scripted replies, not a downloaded language model.",11,Color.GRAY);
+        TextView disclosure=text("Hands-free listening stays on between replies until you press Stop or leave the app. The screen stays awake while listening; Android may stop recognition if its speech service fails. Mic and GPS stop when you leave. No hidden mic, uploads, or ads. Requires installed offline speech recognition. Dialogue is lightweight and scripted.",11,Color.GRAY);
         panel.addView(disclosure);
     }
 
@@ -192,8 +191,7 @@ public class MainActivity extends Activity implements LocationListener {
                 @Override public void onStart(String id){mainHandler.post(()->{speaking=true;setStatus("TORQUE SPEAKING");});}
                 @Override public void onDone(String id){mainHandler.post(()->{
                     speaking=false;
-                    if(active && foreground && autoContinue)mainHandler.postDelayed(()->beginListening(),550);
-                    else if(active){active=false;refreshTalkButton();setStatus("MIC OFF — TAP TALK");}
+                    if(active && foreground)mainHandler.postDelayed(()->beginListening(),650);
                 });}
                 @Override public void onError(String id){mainHandler.post(()->{speaking=false;setStatus("TTS ERROR — CHECK VOICE");});}
             });
@@ -260,7 +258,11 @@ public class MainActivity extends Activity implements LocationListener {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},MIC_REQUEST);
             return;
         }
-        active=true;refreshTalkButton();beginListening();
+        active=true;
+        recognitionFailures=0;
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        refreshTalkButton();
+        beginListening();
     }
     private void refreshTalkButton(){
         if(talkButton!=null)talkButton.setText(active?"■  END CONVERSATION":"🎙  TALK TO TORQUE");
@@ -272,6 +274,7 @@ public class MainActivity extends Activity implements LocationListener {
         if(!SpeechRecognizer.isOnDeviceRecognitionAvailable(this)){stopConversation();setStatus("OFFLINE RECOGNITION UNAVAILABLE");return;}
         if(recognizer != null){recognizer.destroy();recognizer=null;}
         recognizer=SpeechRecognizer.createOnDeviceSpeechRecognizer(this);
+        final int generation = ++listenGeneration;
         recognizer.setRecognitionListener(new RecognitionListener(){
             @Override public void onReadyForSpeech(Bundle b){listening=true;setStatus("MIC ON — LISTENING");}
             @Override public void onBeginningOfSpeech(){setStatus("HEARING YOU…");}
@@ -279,18 +282,32 @@ public class MainActivity extends Activity implements LocationListener {
             @Override public void onBufferReceived(byte[] b){}
             @Override public void onEndOfSpeech(){setStatus("THINKING…");}
             @Override public void onError(int error){
+                if(generation != listenGeneration || !active || !foreground) return;
                 listening=false;
-                if(!active||!foreground)return;
-                if(error==SpeechRecognizer.ERROR_NO_MATCH||error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                    setStatus("MIC ON — LISTENING");
-                    mainHandler.postDelayed(()->beginListening(),450);
-                } else {
-                    setStatus("SPEECH ERROR "+error+" — TAP TALK AGAIN");
+                if(error==SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS){
                     stopConversation();
+                    setStatus("MICROPHONE PERMISSION NEEDED");
+                    return;
+                }
+                if(error==SpeechRecognizer.ERROR_NO_MATCH || error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT){
+                    recognitionFailures=0;
+                    setStatus("MIC ON — WAITING FOR YOU");
+                    mainHandler.postDelayed(()->beginListening(),600);
+                } else {
+                    recognitionFailures++;
+                    if(recognitionFailures>8){
+                        stopConversation();
+                        setStatus("OFFLINE SPEECH ENGINE UNAVAILABLE — TAP TALK TO RETRY");
+                        return;
+                    }
+                    setStatus("RECONNECTING MIC ("+recognitionFailures+"/8)…");
+                    mainHandler.postDelayed(()->beginListening(),Math.min(3500,500*recognitionFailures));
                 }
             }
             @Override public void onResults(Bundle b){
+                if(generation != listenGeneration || !active || !foreground) return;
                 listening=false;
+                recognitionFailures=0;
                 ArrayList<String> matches=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                 if(matches==null||matches.isEmpty()){
                     if(active)mainHandler.postDelayed(()->beginListening(),250);
@@ -321,6 +338,8 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void stopConversation(){
         active=false;listening=false;speaking=false;
+        listenGeneration++;
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if(recognizer!=null){recognizer.cancel();recognizer.destroy();recognizer=null;}
         if(tts!=null)tts.stop();
         refreshTalkButton();setStatus("MIC OFF — TAP TALK");
