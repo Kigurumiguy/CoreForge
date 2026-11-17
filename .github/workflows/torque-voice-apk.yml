@@ -33,17 +33,17 @@ jobs:
       - name: Compile installable Android APK
         run: gradle -p torque-voice --no-daemon --stacktrace :app:assembleDebug
       - name: Copy installable APK
-        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.1.apk
+        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.2.apk
       - uses: actions/upload-artifact@v4
         with:
           name: TORQUE-Voice-APK
-          path: Torque-Voice-0.1.apk
+          path: Torque-Voice-0.2.apk
       - name: Publish direct APK download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view torque-voice-v0.1.0 >/dev/null 2>&1; then
-            gh release upload torque-voice-v0.1.0 Torque-Voice-0.1.apk --clobber
+          if gh release view torque-voice-v0.2.0 >/dev/null 2>&1; then
+            gh release upload torque-voice-v0.2.0 Torque-Voice-0.2.apk --clobber
           else
-            gh release create torque-voice-v0.1.0 Torque-Voice-0.1.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.1 — Android APK" --notes "Voice-first Android test APK. Minimal dark display, phone GPS, local memories, phone TTS voices and on-device speech recognition when supported. Lightweight scripted dialogue; no GGUF model included. No background microphone. Test before driving."
+            gh release create torque-voice-v0.2.0 Torque-Voice-0.2.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.2 — Android APK" --notes "Hands-free conversation Android test APK. One tap starts an ongoing, foreground-only session with automatic re-listening after each response. Minimal dark display, phone GPS, local memories, phone TTS voices and on-device speech recognition when supported. Lightweight scripted dialogue; no GGUF model included. No background microphone. Test before driving."
           fi
