@@ -168,13 +168,11 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     private void rebuildButtons() {
-        boolean wasActive=active;
-        if(wasActive)stopConversation();
-        panel.removeAllViews();
         makeScreen();
         refreshVoiceText();
         updateLocationLabel();
-        setStatus("MIC OFF — TAP TALK");
+        refreshTalkButton();
+        setStatus(active ? (speaking ? "TORQUE SPEAKING" : "MIC ON — LISTENING") : "MIC OFF — TAP TALK");
     }
 
     private void initTts() {
@@ -239,6 +237,13 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void sayOnce(String message) {
         if(tts==null||!ttsReady){setStatus("TEXT TO SPEECH NOT AVAILABLE");return;}
+        if(active && recognizer!=null){
+            listenGeneration++;
+            recognizer.cancel();
+            recognizer.destroy();
+            recognizer=null;
+            listening=false;
+        }
         tts.stop();
         speaking=true;
         tts.speak(message,TextToSpeech.QUEUE_FLUSH,null,"torque-"+(++nextUtterance));
@@ -258,6 +263,7 @@ public class MainActivity extends Activity implements LocationListener {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},MIC_REQUEST);
             return;
         }
+        if(!ttsReady){setStatus("WAITING FOR TORQUE VOICE ENGINE — TRY AGAIN");return;}
         active=true;
         recognitionFailures=0;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
