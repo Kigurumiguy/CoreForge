@@ -46,17 +46,17 @@ jobs:
       - name: Compile installable Android APK
         run: gradle -p torque-voice --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
       - name: Copy installable APK
-        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.9.apk
+        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-1.0.apk
       - uses: actions/upload-artifact@v4
         with:
           name: TORQUE-Voice-APK
-          path: Torque-Voice-0.9.apk
+          path: Torque-Voice-1.0.apk
       - name: Publish direct APK download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view torque-voice-v0.9.0 >/dev/null 2>&1; then
-            gh release upload torque-voice-v0.9.0 Torque-Voice-0.9.apk --clobber
+          if gh release view torque-voice-v1.0.0 >/dev/null 2>&1; then
+            gh release upload torque-voice-v1.0.0 Torque-Voice-1.0.apk --clobber
           else
-            gh release create torque-voice-v0.9.0 Torque-Voice-0.9.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.9 — Android APK" --notes "TORQUE Voice v0.9: replaces Vosk SpeechService microphone with an app-owned 16kHz PCM AudioRecord pipeline, exposes phone-supported AcousticEchoCanceler and NoiseSuppressor by the actual recording session, configurable VOICE_COMMUNICATION or VOICE_RECOGNITION mic capture, live effect status and screen-off service status. Preserves offline STT, speaker embeddings, stop command, local GGUF import, geofence/pins and safe contexts. Android unit tests run before APK publication. Device AEC effectiveness, battery and car AUX echo still require parked real-phone testing; no audio is recorded to disk or uploaded. The local generative model remains user-imported."
+            gh release create torque-voice-v1.0.0 Torque-Voice-1.0.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 1.0 — Android APK" --notes "TORQUE Voice v1.0 OFFLINE ROAD-TRIP BETA: offline-English TTS selection without hidden network voice fallback; explicit in-app Michigan Trip readiness screen; owner-reported drowsiness prompts a pull-over-and-rest response; user-started screen-off service now uses time-bounded CPU wake lock and up to two mic recovery attempts. Includes bundled offline Vosk STT/speaker models, voice turn control, Android audio AEC status, optional locally imported GGUF inference, work/guest/private modes, saved place pins. GitHub Android build and unit tests are required; NOT tested on real phone, airplane mode, or multi-hour trip. No GGUF weights bundled; navigation and GPS in screen-off service are not supported. See torque-voice/ROAD_TRIP_README_v1_0.md for transparent setup and limitations."
           fi
