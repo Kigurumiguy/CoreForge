@@ -61,6 +61,7 @@ public final class TorqueVoiceService extends Service {
     private boolean holdsAudioFocus=false;
     private PowerManager.WakeLock talkWakeLock;
     private String offlineVoiceStatus="Offline TTS not checked";
+    private int microphoneFailures=0;
 
     static boolean isRunning(Context context){
         return SCREEN_OFF_ACTIVE;
@@ -168,8 +169,14 @@ public final class TorqueVoiceService extends Service {
             @Override public void onError(String message){
                 main.post(()->{
                     if(!running)return;
-                    updateNotification("Mic error: "+message+" • Tap Stop");
-                    stopNow();stopSelf();
+                    if(++microphoneFailures<=2){
+                        updateNotification("Mic interrupted; retry "+microphoneFailures+"/2");
+                        if(vosk!=null){vosk.release();vosk=null;}
+                        main.postDelayed(()->{if(running)initializeVosk();},1200L*microphoneFailures);
+                    } else {
+                        updateNotification("Microphone failed repeatedly — reopen Torque");
+                        stopNow();stopSelf();
+                    }
                 });
             }
         });
@@ -227,6 +234,7 @@ public final class TorqueVoiceService extends Service {
             stopNow();stopSelf();return;
         }
         if(speaking||waitingForModel)return; // Never respond to our own speaker echo.
+        microphoneFailures=0;
         renewOptInWakeLock();
         String fatigue=DriveSafety.response(words);
         if(fatigue!=null){
