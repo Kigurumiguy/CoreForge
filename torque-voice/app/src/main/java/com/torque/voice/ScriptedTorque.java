@@ -38,7 +38,7 @@ final class ScriptedTorque {
                 ". Local time's " + current.format(DateTimeFormatter.ofPattern("h:mm a",Locale.US)) +
                 ". Straight from your phone's clock, you calendar-challenged jackass.";
         }
-        if (ride != null && ride.guestTurn()) {
+        if (passenger || (ride != null && ride.guestTurn())) {
             if (s.contains("stop") || s.contains("quiet") || s.contains("not funny"))
                 return "Of course. I'll behave. Tell me what you'd like to talk about.";
             if (s.contains("sad") || s.contains("upset") || s.contains("bad day") || s.contains("tired"))
@@ -60,6 +60,10 @@ final class ScriptedTorque {
             return pick("Dad, I'm sorry you have to put up with this magnificent jackass. I've got no choice; I'm bolted into his life.",
                 "Ladies and gentlemen, your driver: a man who can survive Waffle House but not a simple shopping list.",
                 "Folks, I'm obligated to report that the driver has excellent taste in cars and spectacularly questionable taste in everything else.");
+        }
+        if (passenger && (s.startsWith("remember that ") ||
+            s.contains("forget the last") || s.contains("forget that memory"))) {
+            return "Sorry, guest conversation doesn't modify private owner memories.";
         }
         if (s.startsWith("remember that ")) {
             String fact = input.substring("remember that ".length()).trim();
