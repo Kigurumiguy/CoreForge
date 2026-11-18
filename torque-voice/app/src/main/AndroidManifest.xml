@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
   <uses-feature android:name="android.hardware.microphone" android:required="false"/>
@@ -11,6 +14,7 @@
   </queries>
   <application android:label="TORQUE" android:allowBackup="false" android:supportsRtl="true"
     android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.NoActionBar">
+    <service android:name=".TorqueVoiceService" android:enabled="true" android:exported="false" android:foregroundServiceType="microphone" android:stopWithTask="false"/>
     <activity android:name=".MainActivity" android:exported="true"
         android:configChanges="orientation|screenSize|keyboardHidden">
       <intent-filter>
