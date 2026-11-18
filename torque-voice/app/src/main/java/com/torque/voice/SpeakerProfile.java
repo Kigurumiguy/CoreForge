@@ -99,7 +99,13 @@ final class SpeakerProfile {
 
     private void persist(){
         JSONArray all=new JSONArray();
-        for(double[] v:enrollment){JSONArray arr=new JSONArray();for(double x:v)arr.put(x);all.put(arr);}
+        try{
+            for(double[] v:enrollment){
+                JSONArray arr=new JSONArray();
+                for(double x:v) arr.put(x);
+                all.put(arr);
+            }
+        }catch(JSONException ignored){return;}
         JSONObject root=new JSONObject();
         try{root.put("samples",all);root.put("threshold",threshold);}
         catch(JSONException ignored){return;}
