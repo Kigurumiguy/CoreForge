@@ -16,6 +16,22 @@ final class MemoryDB extends SQLiteOpenHelper {
     }
     @Override public void onUpgrade(SQLiteDatabase db, int oldV, int newV) { }
 
+    /** User-reported facts, explicitly marked historical and not independently verified. */
+    void seedOwnerFacts(Context context) {
+        android.content.SharedPreferences prefs=context.getSharedPreferences("torque_seed",Context.MODE_PRIVATE);
+        if(prefs.getBoolean("seed_v05",false))return;
+        String[] facts={
+            "Owner reported Waffle House #2031 in Boone has 17 customer spaces and 2 employee spaces out back.",
+            "Owner's reported typical Waffle House second shift is 2 p.m. to 9 p.m.; days and overtime can vary.",
+            "Owner said the light by Wendy's sometimes backs up traffic toward Cook Out. NOT live traffic.",
+            "Owner's older Walmart photo showed decorative birch sticks at $15.44. NOT a current shelf price.",
+            "Owner hopes to return to Garden City, Westland or Detroit, Michigan.",
+            "Owner likes They Might Be Giants' Hot Dog, SpongeBob bits and TouchTunes jukebox jokes."
+        };
+        for(String f:facts)remember(f);
+        prefs.edit().putBoolean("seed_v05",true).apply();
+    }
+
     void remember(String fact) {
         if (fact == null || fact.trim().isEmpty()) return;
         android.content.ContentValues v = new android.content.ContentValues();
