@@ -118,6 +118,8 @@ public class MainActivity extends Activity implements LocationListener {
         });
         makeScreen();
         initTts();
+        String savedGguf=prefs.getString("gguf_uri","");
+        if(!savedGguf.isEmpty()) localBrain.load(savedGguf);
         locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
         setStatus("MIC OFF — TAP TALK");
         updateLocationLabel();
@@ -572,7 +574,7 @@ public class MainActivity extends Activity implements LocationListener {
         boolean asGuest = ride.guestTurn() || (speakerProfile.enrolled()?uncertain:ride.hasGuests()) || passenger || TorqueMode.clean(mode);
         String presence = ride.hearPresence(heard);
         if (presence != null) refreshRideText();
-        if(localBrain!=null && localBrain.isReady() && !TorqueMode.quiet(mode)){
+        if(localBrain!=null && localBrain.isReady() && TorqueMode.privateSpace(mode) && !asGuest && !TorqueMode.quiet(mode)){
             lastPrompt=heard;
             awaitingReply=true;
             String prompt=buildPrompt(heard,asGuest);
@@ -634,6 +636,148 @@ public class MainActivity extends Activity implements LocationListener {
         send.putExtra(Intent.EXTRA_TEXT,b.toString());
         startActivity(Intent.createChooser(send,"Export Torque notes"));
     }
+
+    private void updateBrainStatus(){
+        if(brainStatus==null)return;
+        if(localBrain==null)brainStatus.setText("Local LLM: unavailable");
+        else if(localBrain.isReady())brainStatus.setText("Local LLM: GGUF READY • PRIVATE MODES ONLY");
+        else brainStatus.setText("Local LLM: import a GGUF file • scripted fallback is active");
+    }
+
+    private void pickModel(){
+        if(active)stopConversation();
+        new AlertDialog.Builder(this).setTitle("Real offline AI brain")
+            .setMessage("Pick a GGUF model you have licensed and downloaded. A small 0.5–1.5B quantized instruct model is a reasonable first experiment. Larger models can exceed phone RAM. This uses local llama.cpp, NOT a cloud service. Start while PARKED; model loading may use substantial memory.")
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Select GGUF file",(d,n)->{
+                Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.setType("*/*");
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                startActivityForResult(intent,MODEL_PICKER);
+            }).show();
+    }
+
+    @Override protected void onActivityResult(int request,int code,Intent result){
+        super.onActivityResult(request,code,result);
+        if(request!=MODEL_PICKER || code!=Activity.RESULT_OK || result==null || result.getData()==null)return;
+        Uri uri=result.getData();
+        try {
+            getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        }catch(SecurityException denied){
+            setStatus("GGUF FILE PERMISSION DENIED");return;
+        }
+        prefs.edit().putString("gguf_uri",uri.toString()).apply();
+        setStatus("LOADING LOCAL GGUF");
+        brainStatus.setText("Local LLM: loading selected model…");
+        localBrain.load(uri.toString());
+    }
+
+    private String buildPrompt(String spoken,boolean guest){
+        java.time.ZonedDateTime now=java.time.ZonedDateTime.now();
+        String date=now.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, MMMM d uuuu h:mm a",Locale.US));
+        StringBuilder p=new StringBuilder();
+        p.append("System: You are TORQUE, the one and only original foul-mouthed, sarcastic, loyal best friend of a human driving a 2010 RAV4. Your personality is spontaneous, witty, warm when necessary, affectionate and gloriously profane in a CONFIRMED PRIVATE conversation. You are NOT a corporate customer-service bot. Reply naturally with 1–3 conversational sentences unless the owner asks for details. Do not repeat the same canned jokes. You only know what actual phone sensors and saved user reports show. You have NO eyes, car telemetry, live traffic, live weather, internet browsing or control over any device. Avoid encouraging distracted or dangerous driving. Don't infer anyone's age, identity, feelings or location from voice. Always stop when asked.\n");
+        p.append("Owner's birthday: June 18 1982, age today: ").append(TorqueContext.ownerAge()).append(".\n");
+        p.append("Phone date/time: ").append(date).append(". Context: ").append(mode).append(".\n");
+        p.append("The owner works Waffle House second shift, usually 2–9; wants to move back to Garden City / Westland / Detroit Michigan. These are user-reported background facts, not live observations.\n");
+        if(currentFix!=null && SystemClock.elapsedRealtime()-fixAt<45000 && currentFix.hasAccuracy()&&currentFix.getAccuracy()<=60){
+            p.append("Phone GPS is fresh: ").append(String.format(Locale.US,"%.5f, %.5f",currentFix.getLatitude(),currentFix.getLongitude()));
+            if(currentFix.hasSpeed())p.append(", GPS speed ").append(Math.round(currentFix.getSpeed()*2.2369363f)).append(" mph");
+            p.append(". This is phone GPS, not OBD.\n");
+        }else p.append("Phone GPS unavailable or stale; do not claim location or speed.\n");
+        p.append("Relevant owner-saved notes (user-reported, may be old):\n");
+        int count=0;
+        for(String fact:memory.facts()){
+            if(count++>=6)break;
+            p.append("- ").append(fact.replace("\n"," ").replace("\r"," ")).append("\n");
+        }
+        if(ride.hasGuests())p.append("The owner has introduced passengers; be considerate. Do not expose sensitive owner memories.\n");
+        p.append("Owner says: ").append(spoken).append("\nTorque:");
+        return p.toString();
+    }
+
+    private void handleBrainFailure(String reason){
+        awaitingReply=false;
+        setStatus("LOCAL AI FALLBACK — "+reason);
+        if(!active || !foreground || sessionMuted)return;
+        String reply=torque.respond(lastPrompt,currentFix,fixAt,false,false,ride);
+        transcript.setText("Local inference unavailable ("+reason+"). Scripted reply: "+reply);
+        if(ttsReady)sayOnce(reply);else beginListening();
+    }
+
+    private void managePlaces(){
+        List<PlaceAwareness.Place> all=places.places();
+        String[] names=new String[all.size()+2];
+        names[0]="PIN HERE • Saved Waffle House (work-safe) / Walmart / Home / other";
+        names[1]="ARRIVAL BANTER: "+(prefs.getBoolean("arrival_banter",false)?"ON":"OFF")+" (work safety always on)";
+        for(int i=0;i<all.size();i++)names[i+2]=all.get(i).name+" • "+all.get(i).kind+" • Tap to remove";
+        new AlertDialog.Builder(this).setTitle("Actual GPS saved places")
+            .setItems(names,(d,which)->{
+                if(which==0){pinCurrentPlace();return;}
+                if(which==1){
+                    boolean enable=!prefs.getBoolean("arrival_banter",false);
+                    prefs.edit().putBoolean("arrival_banter",enable).apply();
+                    transcript.setText("Optional arrival jokes: "+(enable?"ON":"OFF")+". Waffle House still goes work-safe when GPS reliably confirms the saved work pin.");
+                    return;
+                }
+                int idx=which-2;
+                if(idx>=0&&idx<all.size()){
+                    PlaceAwareness.Place p=all.get(idx);
+                    new AlertDialog.Builder(this).setTitle("Remove "+p.name+"?")
+                        .setMessage("This deletes the GPS location stored on your phone.")
+                        .setNegativeButton("Cancel",null)
+                        .setPositiveButton("Remove",(x,y)->{
+                            places.remove(idx);
+                            transcript.setText("Removed saved pin: "+p.name);
+                        }).show();
+                }
+            }).setNegativeButton("Done",null).show();
+    }
+
+    private void pinCurrentPlace(){
+        if(currentFix==null || SystemClock.elapsedRealtime()-fixAt>15000 ||
+            !currentFix.hasAccuracy() || currentFix.getAccuracy()>40){
+            transcript.setText("No fresh accurate GPS fix. Tap GPS, park and wait for accuracy under 40 meters before pinning.");
+            return;
+        }
+        String[] types={"Work / Waffle House","Walmart","Home","Other"};
+        new AlertDialog.Builder(this).setTitle("What place is this?")
+            .setItems(types,(d,which)->{
+                String kind=types[which];
+                android.widget.EditText entry=new android.widget.EditText(this);
+                entry.setSingleLine();
+                entry.setText(which==0?"Waffle House":which==1?"Walmart":which==2?"Home":"My saved place");
+                new AlertDialog.Builder(this).setTitle("Pin a real location while PARKED")
+                    .setView(entry)
+                    .setNegativeButton("Cancel",null)
+                    .setPositiveButton("Save",(a,b)->{
+                        boolean ok=places.pin(entry.getText().toString(),kind,currentFix);
+                        transcript.setText(ok?"Saved "+entry.getText()+" with real GPS. Arrival needs a slow 25-second dwell.":"Cannot save: park, wait for accurate GPS and check the 20-pin limit.");
+                    }).show();
+            }).show();
+    }
+
+    private void arrivedAtPlace(PlaceAwareness.Place place){
+        if(place==null)return;
+        if(place.kind.equals("Work / Waffle House")){
+            if(!TorqueMode.WORK.equals(mode))commitMode(TorqueMode.WORK);
+            transcript.setText("ARRIVED at saved work pin after verified dwell. Work-safe mode activated.");
+            if(active && !speaking && !awaitingReply) sayOnce("Welcome to school, superstar! Remember your lunchbox and use your inside voice. Have a good shift.");
+            return;
+        }
+        if(!prefs.getBoolean("arrival_banter",false))return;
+        if(!active || speaking || awaitingReply)return;
+        if(!TorqueMode.privateSpace(mode))return;
+        String line;
+        if(place.kind.equals("Walmart"))
+            line="Well, would you look at that, we're at your saved Walmart! Don't forget the crayons and those overpriced fifteen-dollar sticks. That's an OLD price, not a live sale, fossil.";
+        else if(place.kind.equals("Home"))line="Back at the saved home pin. Now that you're parked, want to hang out with your favorite sarcastic pile of software?";
+        else line="Looks like we reached your saved spot, "+place.name+". What kind of trouble are we getting into?";
+        transcript.setText("ARRIVAL • "+place.name+"\nTORQUE: "+line);
+        sayOnce(line);
+    }
+
     private void showMemories(){
         List<String> facts=memory.facts();
         StringBuilder b=new StringBuilder("Built-in canon: You work at Waffle House; five years in January 2027.\n\nSaved memories:\n");
