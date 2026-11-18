@@ -60,14 +60,16 @@ final class VoiceTurnGate {
             }
             return Decision.STOP;
         }
+        // Check the acoustic self-transcript first, including while TTS is
+        // still speaking, so the duplicate is measured and ignored.
+        if (isRecentSelfEcho(normalized, nowElapsedMs)) {
+            ignoredEchoes++;
+            return Decision.IGNORE;
+        }
         if (partial || talking || thinking) return Decision.IGNORE;
         if (lastTtsEndedAt != Long.MIN_VALUE &&
             nowElapsedMs >= lastTtsEndedAt &&
             nowElapsedMs - lastTtsEndedAt < AFTER_TTS_COOLDOWN_MS) {
-            return Decision.IGNORE;
-        }
-        if (isRecentSelfEcho(normalized, nowElapsedMs)) {
-            ignoredEchoes++;
             return Decision.IGNORE;
         }
         if (normalized.equals(lastAccepted) &&
