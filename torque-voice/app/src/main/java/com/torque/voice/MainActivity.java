@@ -57,6 +57,7 @@ public class MainActivity extends Activity implements LocationListener {
     private TorqueLocalBrain localBrain;
     private PlaceAwareness places;
     private TextView brainStatus;
+    private TextView audioProcessingStatus;
     private boolean allowBargeIn=true;
     private final VoiceTurnGate turnGate=new VoiceTurnGate();
     private boolean awaitingReply=false;
@@ -118,6 +119,9 @@ public class MainActivity extends Activity implements LocationListener {
             }
             @Override public void onPartial(String words){
                 mainHandler.post(()->onPartialSpeech(words));
+            }
+            @Override public void onAudioStatus(String explanation){
+                mainHandler.post(()->{if(audioProcessingStatus!=null)audioProcessingStatus.setText("Mic: "+explanation);});
             }
             @Override public void onError(String explanation) {
                 mainHandler.post(()->{if(!active)setStatus(explanation);else if(vosk!=null && vosk.listening()){stopConversation();setStatus(explanation);}});
@@ -198,6 +202,9 @@ public class MainActivity extends Activity implements LocationListener {
         addButton(button("SCREEN-OFF TORQUE • STOP",this::stopScreenOffTorque));
         panel.addView(text("Screen-off session: explicit Start, persistent microphone notification, Stop anytime. Phone GPS/arrival awareness remains foreground-only.",11,Color.LTGRAY));
         addButton(button("🎤  CHOOSE TORQUE'S VOICE", this::chooseVoice));
+        audioProcessingStatus=text("Mic processing: preparing…",12,Color.rgb(110,185,255));
+        panel.addView(audioProcessingStatus);
+        addButton(button("MIC / ECHO CALIBRATION",this::configureMicrophone));
 
         rideText = text(ride.summary(),12,Color.rgb(110,185,255));
         panel.addView(rideText);
@@ -246,6 +253,7 @@ public class MainActivity extends Activity implements LocationListener {
         refreshVoiceText();
         refreshRideText();
         refreshVoicePrintStatus();
+        refreshAudioStatus();
         updateBrainStatus();
         updateLocationLabel();
         refreshTalkButton();
@@ -286,6 +294,43 @@ public class MainActivity extends Activity implements LocationListener {
         Collections.sort(voices,(a,b)->a.getName().compareToIgnoreCase(b.getName()));
         return voices;
     }
+    private void refreshAudioStatus(){
+        if(audioProcessingStatus==null)return;
+        if(vosk!=null && vosk.listening())audioProcessingStatus.setText("Mic: "+vosk.audioStatus());
+        else audioProcessingStatus.setText("Mic off • Android echo processing activates on TALK");
+    }
+
+    private void configureMicrophone(){
+        android.content.SharedPreferences audio=getSharedPreferences("torque_audio",MODE_PRIVATE);
+        boolean comm=audio.getBoolean("voice_communication",true);
+        boolean echo=audio.getBoolean("aec_enabled",true);
+        boolean noise=audio.getBoolean("ns_enabled",true);
+        String[] names={
+            "Audio source: "+(comm?"VOICE_COMMUNICATION (recommended)":"VOICE_RECOGNITION"),
+            "Android echo canceller: "+(echo?"REQUESTED":"DISABLED"),
+            "Android noise suppressor: "+(noise?"REQUESTED":"DISABLED"),
+            "Show current microphone processing status"
+        };
+        new AlertDialog.Builder(this).setTitle("Torque audio calibration")
+            .setMessage("Test while PARKED. This uses Android microphone processing when the phone supports it. AEC works on the phone's actual audio session; AUX speaker echo cancellation is not guaranteed. Settings apply to the next listening session. No audio recordings are saved.")
+            .setItems(names,(d,i)->{
+                if(i==3){
+                    new AlertDialog.Builder(this).setTitle("Actual microphone processing")
+                        .setMessage(vosk==null?"Microphone engine not prepared.":vosk.audioStatus())
+                        .setPositiveButton("Done",null).show();
+                    return;
+                }
+                android.content.SharedPreferences.Editor e=audio.edit();
+                if(i==0)e.putBoolean("voice_communication",!comm);
+                if(i==1)e.putBoolean("aec_enabled",!echo);
+                if(i==2)e.putBoolean("ns_enabled",!noise);
+                e.apply();
+                if(active)stopConversation();
+                refreshAudioStatus();
+                transcript.setText("Audio preference saved. Tap TALK to restart the microphone with the new setting.");
+            }).setNegativeButton("Done",null).show();
+    }
+
     private void chooseVoice(){
         if(!ttsReady){setStatus("VOICE ENGINE STILL LOADING");return;}
         List<Voice> voices = installedEnglishVoices();
@@ -733,6 +778,9 @@ public class MainActivity extends Activity implements LocationListener {
                 }
                 @Override public void onPartial(String words){
                     mainHandler.post(()->onPartialSpeech(words));
+                }
+                @Override public void onAudioStatus(String explanation){
+                    mainHandler.post(()->{if(audioProcessingStatus!=null)audioProcessingStatus.setText("Mic: "+explanation);});
                 }
                 @Override public void onError(String explanation){
                     mainHandler.post(()->setStatus(explanation));
