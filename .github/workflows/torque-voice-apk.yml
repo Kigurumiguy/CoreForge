@@ -44,19 +44,19 @@ jobs:
         with:
           gradle-version: '8.13'
       - name: Compile installable Android APK
-        run: gradle -p torque-voice --no-daemon --stacktrace :app:assembleDebug
+        run: gradle -p torque-voice --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
       - name: Copy installable APK
-        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.7.apk
+        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.8.apk
       - uses: actions/upload-artifact@v4
         with:
           name: TORQUE-Voice-APK
-          path: Torque-Voice-0.7.apk
+          path: Torque-Voice-0.8.apk
       - name: Publish direct APK download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view torque-voice-v0.7.0 >/dev/null 2>&1; then
-            gh release upload torque-voice-v0.7.0 Torque-Voice-0.7.apk --clobber
+          if gh release view torque-voice-v0.8.0 >/dev/null 2>&1; then
+            gh release upload torque-voice-v0.8.0 Torque-Voice-0.8.apk --clobber
           else
-            gh release create torque-voice-v0.7.0 Torque-Voice-0.7.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.7 — Android APK" --notes "TORQUE v0.7 experimental screen-off microphone: user-started Android microphone foreground service, persistent notification with Stop button, offline Vosk conversation, optional imported local GGUF inference, audio focus, no boot receiver or covert recording. GPS/arrival remains foreground-only. No auto-restart. Screen-off audio interruption and model inference require physical-device testing. Choose a context while app is open; private mode requires explicit confirmation. Full release test result: APK compile only; not device tested."
+            gh release create torque-voice-v0.8.0 Torque-Voice-0.8.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.8 — Android APK" --notes "TORQUE Voice v0.8: bounded voice-turn control in foreground and screen-off modes; fast stop from partial Vosk transcripts, transcript de-duplication, self-echo suppression and TTS cooldowns. Runs Android unit tests before shipping. Requires a parked-car acoustic test for speaker echo and owner voice ID. Includes Vosk offline speech and optional licensed GGUF model import; no bundled generative model. Service is opt-in with Stop notification; location is foreground-only."
           fi
