@@ -159,6 +159,9 @@ public final class TorqueVoiceService extends Service {
             @Override public void onPartial(String words){
                 main.post(()->onPartialHeard(words));
             }
+            @Override public void onAudioStatus(String details){
+                main.post(()->{if(running)updateNotification("MIC ON • "+details);});
+            }
             @Override public void onError(String message){
                 main.post(()->{
                     if(!running)return;
