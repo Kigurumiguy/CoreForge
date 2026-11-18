@@ -16,6 +16,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import java.util.Locale;
@@ -58,6 +59,8 @@ public final class TorqueVoiceService extends Service {
     private SharedPreferences prefs;
     private android.media.AudioManager audioManager;
     private boolean holdsAudioFocus=false;
+    private PowerManager.WakeLock talkWakeLock;
+    private String offlineVoiceStatus="Offline TTS not checked";
 
     static boolean isRunning(Context context){
         return SCREEN_OFF_ACTIVE;
@@ -96,6 +99,7 @@ public final class TorqueVoiceService extends Service {
         mode=TorqueMode.normalize(intent.getStringExtra(EXTRA_MODE));
         running=true;
         SCREEN_OFF_ACTIVE=true;
+        holdCpuDuringOptInConversation();
         getSharedPreferences(PREFS,MODE_PRIVATE).edit().putBoolean(KEY_RUNNING,true).apply();
         memory=new MemoryDB(this);
         scripted=new ScriptedTorque(memory);
@@ -113,19 +117,18 @@ public final class TorqueVoiceService extends Service {
                 updateNotification("Phone speech output unavailable • Stop");
                 stopNow();stopSelf();return;
             }
-            voiceReady=true;
-            tts.setLanguage(Locale.US);
+            OfflineVoicePolicy.Selection chosen=OfflineVoicePolicy.apply(tts,prefs.getString("voice",""));
+            voiceReady=chosen.ready;
+            offlineVoiceStatus=chosen.status;
+            if(!voiceReady){
+                // Android might only have cloud-based TTS installed. Fail clearly,
+                // never silently substitute a network voice in the dead zone.
+                updateNotification("Offline voice unavailable • Open app for setup");
+                stopNow();stopSelf();return;
+            }
             tts.setPitch(prefs.getFloat("pitch",0.87f));
             tts.setSpeechRate(0.97f);
-            String selected=prefs.getString("voice","");
-            Set<Voice> installed=tts.getVoices();
-            if(installed!=null){
-                for(Voice v:installed){
-                    if(v.getName().equals(selected)&&!v.isNetworkConnectionRequired()){
-                        tts.setVoice(v);break;
-                    }
-                }
-            }
+
             tts.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
@@ -224,6 +227,12 @@ public final class TorqueVoiceService extends Service {
             stopNow();stopSelf();return;
         }
         if(speaking||waitingForModel)return; // Never respond to our own speaker echo.
+        renewOptInWakeLock();
+        String fatigue=DriveSafety.response(words);
+        if(fatigue!=null){
+            speak(fatigue);
+            return;
+        }
         String requested=TorqueMode.command(words);
         if(requested!=null){
             if(TorqueMode.privateSpace(requested)){
@@ -273,6 +282,33 @@ public final class TorqueVoiceService extends Service {
         turnGate.speechStarted(text,android.os.SystemClock.elapsedRealtime());
         updateNotification("Torque speaking • Say 'Torque, enough' to stop");
         tts.speak(text,TextToSpeech.QUEUE_FLUSH,null,"screen-off-"+(++utterance));
+    }
+
+    /**
+     * Keep CPU available during a consented microphone session.
+     * Time-bounded to avoid indefinite locks after failures; renewed on actual speech.
+     * Always release in stopNow. Charger recommended for long drives.
+     */
+    private void holdCpuDuringOptInConversation(){
+        try{
+            PowerManager power=(PowerManager)getSystemService(POWER_SERVICE);
+            if(power==null)return;
+            talkWakeLock=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"Torque:VoiceConversation");
+            talkWakeLock.setReferenceCounted(false);
+            talkWakeLock.acquire(2L*60L*60L*1000L);
+        }catch(RuntimeException ignored){talkWakeLock=null;}
+    }
+
+    private void renewOptInWakeLock(){
+        if(!running || talkWakeLock==null)return;
+        try{talkWakeLock.acquire(2L*60L*60L*1000L);}catch(RuntimeException ignored){}
+    }
+
+    private void releaseWakeLock(){
+        if(talkWakeLock!=null){
+            try{if(talkWakeLock.isHeld())talkWakeLock.release();}catch(RuntimeException ignored){}
+            talkWakeLock=null;
+        }
     }
 
     private void requestAudioFocus(){
@@ -332,6 +368,7 @@ public final class TorqueVoiceService extends Service {
         if(vosk!=null){vosk.release();vosk=null;}
         if(tts!=null){tts.stop();tts.shutdown();tts=null;}
         abandonAudioFocus();
+        releaseWakeLock();
         if(memory!=null){memory.close();memory=null;}
         stopForeground(STOP_FOREGROUND_REMOVE);
     }
