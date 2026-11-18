@@ -74,7 +74,7 @@ public class MainActivity extends Activity implements LocationListener {
         pitch = prefs.getFloat("pitch", 0.87f);
         passenger = prefs.getBoolean("passenger", false);
         quiet = prefs.getBoolean("quiet", false);
-        mode=TorqueMode.normalize(prefs.getString("privacy_mode",TorqueMode.GUEST));
+        mode=TorqueMode.GUEST; // Fail closed on every app launch; never silently re-enter uncensored mode.
         memory = new MemoryDB(this);
         torque = new ScriptedTorque(memory);
         speakerProfile = new SpeakerProfile(this);
@@ -529,11 +529,11 @@ public class MainActivity extends Activity implements LocationListener {
         boolean likelyOwner = raw != null && speakerProfile.enrolled() &&
             speakerProfile.classify(raw) == SpeakerProfile.Identity.OWNER;
         boolean uncertain = speakerProfile.enrolled() && !likelyOwner;
-        boolean asGuest = ride.guestTurn() || uncertain || passenger || TorqueMode.clean(mode);
+        boolean asGuest = ride.guestTurn() || (speakerProfile.enrolled()?uncertain:ride.hasGuests()) || passenger || TorqueMode.clean(mode);
         String presence = ride.hearPresence(heard);
         if (presence != null) refreshRideText();
         String specialized=contextReply.answer(heard,mode,asGuest);
-        String reply=presence!=null?presence:(specialized!=null?specialized:(TorqueMode.privateSpace(mode)?torque.respond(heard,currentFix,fixAt,asGuest,quiet,ride):contextReply.answer("hello",mode,true)));
+        String reply=(presence!=null && !TorqueMode.clean(mode))?presence:(specialized!=null?specialized:(TorqueMode.privateSpace(mode)?torque.respond(heard,currentFix,fixAt,asGuest,quiet,ride):contextReply.answer("hello",mode,true)));
         if (TorqueMode.privateSpace(mode) && !asGuest && presence == null) memory.log(heard, reply);
         String speaker = likelyOwner ? "LIKELY OWNER" : uncertain ? "UNKNOWN / GUEST" :
             asGuest ? "GUEST (MANUAL)" : "NOT VOICE-VERIFIED";
