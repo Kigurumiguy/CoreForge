@@ -4,7 +4,7 @@ plugins {
  }
 android {
  namespace = "com.torque.voice"
- compileSdk = 35
+ compileSdk = 36
  defaultConfig {
   applicationId = "com.torque.voice"
   minSdk = 26
