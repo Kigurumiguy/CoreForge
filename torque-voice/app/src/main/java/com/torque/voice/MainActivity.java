@@ -418,6 +418,102 @@ public class MainActivity extends Activity implements LocationListener {
         String precision=currentFix.hasAccuracy()?" ±"+Math.round(currentFix.getAccuracy())+"m":"";
         gpsText.setText("PHONE GPS • "+speed+precision+"\n"+String.format(Locale.US,"%.5f, %.5f",currentFix.getLatitude(),currentFix.getLongitude()));
     }
+
+    private void refreshVoicePrintStatus() {
+        if (voicePrintStatus == null) return;
+        if (vosk == null || !vosk.ready()) {
+            voicePrintStatus.setText("Offline voice engine preparing; phone transcription fallback until ready.");
+        } else if (speakerProfile == null || !speakerProfile.enrolled()) {
+            voicePrintStatus.setText("VOICE ID: NOT ENROLLED (" + (speakerProfile == null ? 0 : speakerProfile.samples()) +
+                "/3). Owner voice is not being identified.");
+        } else {
+            voicePrintStatus.setText("VOICE ID: OWNER ENROLLED • Uncertain voices treated as guests • Local only");
+        }
+    }
+
+    private void showVoiceEnrollment() {
+        if (vosk == null || !vosk.ready()) {
+            new AlertDialog.Builder(this).setTitle("Offline voice models loading")
+                .setMessage("Torque is setting up the built-in speech and speaker models. Keep this app open and try again when voice identification is ready.")
+                .setPositiveButton("OK", null).show();
+            return;
+        }
+        String message = "Enroll your voice in a quiet, PARKED car. Say three DIFFERENT, long sentences for 5–10 seconds each. Nobody else should talk during enrollment. Torque keeps only acoustic speaker embeddings locally, never audio recordings. This is imperfect speaker matching, NOT biometric authentication.\n\nSamples: " + speakerProfile.samples() + "/3.";
+        new AlertDialog.Builder(this).setTitle("Private owner voice enrollment")
+            .setMessage(message)
+            .setPositiveButton("Enroll / Continue", (d,w) -> {
+                if (speakerProfile.enrolled()) {
+                    transcript.setText("You're already enrolled. Erase your profile first to enroll a new voice.");
+                    return;
+                }
+                enrollingVoice = true;
+                if (!active) startConversation();
+                if (active) {
+                    transcript.setText("OWNER VOICE ENROLLMENT " + speakerProfile.samples() +
+                        "/3\nSpeak one different LONG sentence. Pause after it so Vosk can detect the end.");
+                    setStatus("VOICE ENROLLMENT — LISTENING");
+                }
+            })
+            .setNeutralButton("Erase voice ID", (d,w) ->
+                new AlertDialog.Builder(this).setTitle("Erase your local voiceprint?")
+                    .setMessage("This deletes your acoustic owner samples only. Your other memories stay untouched.")
+                    .setNegativeButton("Cancel",null)
+                    .setPositiveButton("Erase", (x,y) -> {
+                        speakerProfile.erase();
+                        enrollingVoice = false;
+                        refreshVoicePrintStatus();
+                        transcript.setText("Owner voiceprint erased.");
+                    }).show())
+            .setNegativeButton("Cancel",null).show();
+    }
+
+    private void handleSpeech(String heard, org.json.JSONObject raw) {
+        if (heard == null || heard.trim().isEmpty() || !active || !foreground) return;
+        if (enrollingVoice) {
+            if (raw == null) {
+                enrollingVoice = false;
+                transcript.setText("Enrollment requires the built-in offline Vosk recognizer.");
+                return;
+            }
+            boolean saved = speakerProfile.addEnrollment(raw);
+            refreshVoicePrintStatus();
+            if (!saved) {
+                transcript.setText("Not enough clear speech for a voice sample. Speak a LONGER sentence in a quiet place.");
+                setStatus("ENROLLMENT — TRY A LONGER SENTENCE");
+                return;
+            }
+            if (speakerProfile.enrolled()) {
+                enrollingVoice = false;
+                transcript.setText("Voice enrollment saved! Torque now checks acoustic voice signatures and treats unknown voices politely. This is not guaranteed identity verification.");
+                setStatus("OWNER VOICE ENROLLED — MIC ON");
+            } else {
+                transcript.setText("Sample " + speakerProfile.samples() + "/3 saved. Say a DIFFERENT long sentence now.");
+                setStatus("ENROLLMENT " + speakerProfile.samples() + "/3 — MIC ON");
+            }
+            return;
+        }
+        String low = heard.trim().toLowerCase(Locale.US);
+        if (low.equals("stop torque") || low.equals("mute torque") ||
+            low.equals("torque stop listening")) {
+            stopConversation();
+            return;
+        }
+        boolean likelyOwner = raw != null && speakerProfile.enrolled() &&
+            speakerProfile.classify(raw) == SpeakerProfile.Identity.OWNER;
+        boolean uncertain = speakerProfile.enrolled() && !likelyOwner;
+        boolean asGuest = ride.guestTurn() || uncertain || passenger;
+        String presence = ride.hearPresence(heard);
+        if (presence != null) refreshRideText();
+        String reply = presence != null ? presence :
+            torque.respond(heard, currentFix, fixAt, asGuest, quiet, ride);
+        if (!asGuest && presence == null) memory.log(heard, reply);
+        String speaker = likelyOwner ? "LIKELY OWNER" : uncertain ? "UNKNOWN / GUEST" :
+            asGuest ? "GUEST (MANUAL)" : "NOT VOICE-VERIFIED";
+        transcript.setText(speaker + ": " + heard + "\n\nTORQUE: " + reply);
+        if (ttsReady) sayOnce(reply);
+        else { stopConversation(); setStatus("VOICE OUTPUT UNAVAILABLE"); }
+    }
+
     private void refreshRideText() {
         if (rideText != null) rideText.setText(ride.summary());
     }
