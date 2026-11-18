@@ -121,11 +121,12 @@ public class MainActivity extends Activity implements LocationListener {
         makeScreen();
         initTts();
         String savedGguf=prefs.getString("gguf_uri","");
-        if(!savedGguf.isEmpty()) localBrain.load(savedGguf);
+        if(!savedGguf.isEmpty() && !TorqueVoiceService.isRunning(this)) localBrain.load(savedGguf);
         locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
         setStatus("MIC OFF — TAP TALK");
         updateLocationLabel();
-        vosk.prepare();
+        if(!TorqueVoiceService.isRunning(this))vosk.prepare();
+        else setStatus("SCREEN-OFF TORQUE ACTIVE • STOP IN NOTIFICATION");
     }
 
     private GradientDrawable shape(int color) {
@@ -676,6 +677,8 @@ public class MainActivity extends Activity implements LocationListener {
                 stopConversation();
                 // A single speech recognizer at a time: release the Activity microphone pipeline.
                 if(vosk!=null){vosk.release();vosk=null;}
+                if(localBrain!=null){localBrain.release();localBrain=null;}
+                updateBrainStatus();
                 Intent intent=new Intent(this,TorqueVoiceService.class)
                     .setAction(TorqueVoiceService.ACTION_START)
                     .putExtra(TorqueVoiceService.EXTRA_MODE,mode);
