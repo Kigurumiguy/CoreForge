@@ -52,10 +52,13 @@ public class MainActivity extends Activity implements LocationListener {
     private float pitch = 0.87f;
     private MemoryDB memory;
     private ScriptedTorque torque;
+    private SpeakerProfile speakerProfile;
+    private VoskController vosk;
+    private boolean enrollingVoice = false;
     private final RideContext ride = new RideContext();
     private TextView rideText;
     private SharedPreferences prefs;
-    private TextView status, transcript, gpsText, voiceText;
+    private TextView status, transcript, gpsText, voiceText, voicePrintStatus;
     private Button talkButton;
     private LinearLayout panel;
     private final int MIC_REQUEST = 200;
@@ -71,11 +74,29 @@ public class MainActivity extends Activity implements LocationListener {
         quiet = prefs.getBoolean("quiet", false);
         memory = new MemoryDB(this);
         torque = new ScriptedTorque(memory);
+        speakerProfile = new SpeakerProfile(this);
+        vosk = new VoskController(this, new VoskController.Callbacks(){
+            @Override public void onReady(){
+                if(!active)setStatus("OFFLINE VOICE ENGINE READY");
+                refreshVoicePrintStatus();
+            }
+            @Override public void onSpeech(String words, org.json.JSONObject result) {
+                if(active && foreground) handleSpeech(words,result);
+            }
+            @Override public void onError(String explanation) {
+                if(!active)setStatus(explanation);
+                else if(vosk!=null && vosk.listening()){
+                    stopConversation();
+                    setStatus(explanation);
+                }
+            }
+        });
         makeScreen();
         initTts();
         locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
         setStatus("MIC OFF — TAP TALK");
         updateLocationLabel();
+        vosk.prepare();
     }
 
     private GradientDrawable shape(int color) {
@@ -143,6 +164,9 @@ public class MainActivity extends Activity implements LocationListener {
         rideText = text(ride.summary(),12,Color.rgb(110,185,255));
         panel.addView(rideText);
         addButton(button("PASSENGERS / WHO'S TALKING", this::showRideControls));
+        addButton(button("ENROLL / ERASE OWNER VOICE", this::showVoiceEnrollment));
+        voicePrintStatus = text("Preparing offline voice identification…",12,Color.rgb(200,188,155));
+        panel.addView(voicePrintStatus);
 
         voiceText = text("Voice: loading phone voices…",12,Color.LTGRAY);
         panel.addView(voiceText);
@@ -177,6 +201,7 @@ public class MainActivity extends Activity implements LocationListener {
         makeScreen();
         refreshVoiceText();
         refreshRideText();
+        refreshVoicePrintStatus();
         updateLocationLabel();
         refreshTalkButton();
         setStatus(active ? (speaking ? "TORQUE SPEAKING" : "MIC ON — LISTENING") : "MIC OFF — TAP TALK");
@@ -244,6 +269,7 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void sayOnce(String message) {
         if(tts==null||!ttsReady){setStatus("TEXT TO SPEECH NOT AVAILABLE");return;}
+        if(active && vosk!=null && vosk.listening()) vosk.pause(true);
         if(active && recognizer!=null){
             listenGeneration++;
             recognizer.cancel();
@@ -257,12 +283,12 @@ public class MainActivity extends Activity implements LocationListener {
     }
 
     private void startConversation(){
-        if(Build.VERSION.SDK_INT>=31 && !SpeechRecognizer.isOnDeviceRecognitionAvailable(this)){
+        if((vosk==null || !vosk.ready()) && Build.VERSION.SDK_INT>=31 && !SpeechRecognizer.isOnDeviceRecognitionAvailable(this)){
             setStatus("OFFLINE SPEECH RECOGNIZER NOT INSTALLED");
             transcript.setText("Install an on-device speech recognition language pack in your phone settings. Torque will not secretly send your voice to an online service.");
             return;
         }
-        if(Build.VERSION.SDK_INT<31) {
+        if((vosk==null || !vosk.ready()) && Build.VERSION.SDK_INT<31) {
             setStatus("OFFLINE SPEECH CANNOT BE VERIFIED ON THIS ANDROID VERSION");
             return;
         }
@@ -281,8 +307,15 @@ public class MainActivity extends Activity implements LocationListener {
         if(talkButton!=null)talkButton.setText(active?"■  END CONVERSATION":"🎙  TALK TO TORQUE");
     }
     private void beginListening(){
-        if(!active || !foreground || speaking || listening)return;
-        if(Build.VERSION.SDK_INT<31)return;
+        if(!active || !foreground || speaking)return;
+        if(vosk!=null && vosk.ready()){
+            if(!vosk.listening())vosk.start();
+            else vosk.pause(false);
+            listening=vosk.listening();
+            if(listening)setStatus(enrollingVoice ? "ENROLLMENT: SAY A LONG SENTENCE" : "MIC ON — OFFLINE VOICE ID");
+            return;
+        }
+        if(listening || Build.VERSION.SDK_INT<31)return;
         if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){stopConversation();return;}
         if(!SpeechRecognizer.isOnDeviceRecognitionAvailable(this)){stopConversation();setStatus("OFFLINE RECOGNITION UNAVAILABLE");return;}
         if(recognizer != null){recognizer.destroy();recognizer=null;}
@@ -328,20 +361,7 @@ public class MainActivity extends Activity implements LocationListener {
                 }
                 String heard=matches.get(0);
                 if(heard==null||heard.trim().isEmpty())return;
-                if(heard.equalsIgnoreCase("stop torque")||heard.equalsIgnoreCase("mute torque")){
-                    stopConversation();return;
-                }
-                String presence = ride.hearPresence(heard);
-                String answer = presence != null ? presence : torque.respond(heard,currentFix,fixAt,passenger,quiet,ride);
-                if(presence != null) refreshRideText();
-                if(ride.guestTurn() && presence == null) {
-                    // Guest turns are temporary; do not save them to the owner's history.
-                } else {
-                    memory.log(heard,answer);
-                }
-                transcript.setText("YOU: "+heard+"\n\nTORQUE: "+answer);
-                if(ttsReady) sayOnce(answer);
-                else {active=false;refreshTalkButton();setStatus("NO TTS ENGINE INSTALLED");}
+                handleSpeech(heard,null);
             }
             @Override public void onPartialResults(Bundle b){}
             @Override public void onEvent(int e,Bundle b){}
@@ -357,6 +377,8 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void stopConversation(){
         active=false;listening=false;speaking=false;
+        enrollingVoice=false;
+        if(vosk!=null)vosk.stop();
         listenGeneration++;
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if(recognizer!=null){recognizer.cancel();recognizer.destroy();recognizer=null;}
@@ -465,6 +487,7 @@ public class MainActivity extends Activity implements LocationListener {
     }
     @Override protected void onDestroy(){
         stopConversation();
+        if(vosk!=null){vosk.release();vosk=null;}
         if(tts!=null){tts.shutdown();tts=null;}
         if(memory!=null)memory.close();
         super.onDestroy();
