@@ -46,17 +46,17 @@ jobs:
       - name: Compile installable Android APK
         run: gradle -p torque-voice --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
       - name: Copy installable APK
-        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.8.apk
+        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.9.apk
       - uses: actions/upload-artifact@v4
         with:
           name: TORQUE-Voice-APK
-          path: Torque-Voice-0.8.apk
+          path: Torque-Voice-0.9.apk
       - name: Publish direct APK download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view torque-voice-v0.8.0 >/dev/null 2>&1; then
-            gh release upload torque-voice-v0.8.0 Torque-Voice-0.8.apk --clobber
+          if gh release view torque-voice-v0.9.0 >/dev/null 2>&1; then
+            gh release upload torque-voice-v0.9.0 Torque-Voice-0.9.apk --clobber
           else
-            gh release create torque-voice-v0.8.0 Torque-Voice-0.8.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.8 — Android APK" --notes "TORQUE Voice v0.8: bounded voice-turn control in foreground and screen-off modes; fast stop from partial Vosk transcripts, transcript de-duplication, self-echo suppression and TTS cooldowns. Runs Android unit tests before shipping. Requires a parked-car acoustic test for speaker echo and owner voice ID. Includes Vosk offline speech and optional licensed GGUF model import; no bundled generative model. Service is opt-in with Stop notification; location is foreground-only."
+            gh release create torque-voice-v0.9.0 Torque-Voice-0.9.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.9 — Android APK" --notes "TORQUE Voice v0.9: replaces Vosk SpeechService microphone with an app-owned 16kHz PCM AudioRecord pipeline, exposes phone-supported AcousticEchoCanceler and NoiseSuppressor by the actual recording session, configurable VOICE_COMMUNICATION or VOICE_RECOGNITION mic capture, live effect status and screen-off service status. Preserves offline STT, speaker embeddings, stop command, local GGUF import, geofence/pins and safe contexts. Android unit tests run before APK publication. Device AEC effectiveness, battery and car AUX echo still require parked real-phone testing; no audio is recorded to disk or uploaded. The local generative model remains user-imported."
           fi
