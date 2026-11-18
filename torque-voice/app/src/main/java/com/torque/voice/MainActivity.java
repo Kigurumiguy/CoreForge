@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.net.Uri;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -53,6 +54,14 @@ public class MainActivity extends Activity implements LocationListener {
     private MemoryDB memory;
     private ScriptedTorque torque;
     private final TorqueContext contextReply=new TorqueContext();
+    private TorqueLocalBrain localBrain;
+    private PlaceAwareness places;
+    private TextView brainStatus;
+    private boolean allowBargeIn=true;
+    private boolean awaitingReply=false;
+    private boolean sessionMuted=false;
+    private String lastPrompt="";
+    private static final int MODEL_PICKER=204;
     private String mode=TorqueMode.GUEST;
     private SpeakerProfile speakerProfile;
     private VoskController vosk;
@@ -77,8 +86,24 @@ public class MainActivity extends Activity implements LocationListener {
         mode=TorqueMode.GUEST; // Fail closed on every app launch; never silently re-enter uncensored mode.
         memory = new MemoryDB(this);
         memory.seedOwnerFacts(this);
+        places=new PlaceAwareness(this);
         torque = new ScriptedTorque(memory);
         speakerProfile = new SpeakerProfile(this);
+        localBrain = new TorqueLocalBrain(this,new TorqueLocalBrain.Callbacks(){
+            @Override public void modelReady(String description){
+                setStatus("LOCAL GGUF READY");
+                updateBrainStatus();
+            }
+            @Override public void answer(String result,long ms,int tokens){
+                awaitingReply=false;
+                if(!active || !foreground || sessionMuted)return;
+                String spoken=result.trim();
+                if(spoken.isEmpty()){handleBrainFailure("Empty model response");return;}
+                transcript.setText("LOCAL AI: "+spoken+"\n\n"+tokens+" tokens / "+ms+"ms");
+                if(ttsReady)sayOnce(spoken);else beginListening();
+            }
+            @Override public void failed(String reason){handleBrainFailure(reason);}
+        });
         vosk = new VoskController(this, new VoskController.Callbacks(){
             @Override public void onReady(){
                 if(!active)setStatus("OFFLINE VOICE ENGINE READY");
@@ -191,6 +216,10 @@ public class MainActivity extends Activity implements LocationListener {
         }));
 
         addButton(button("SPEAKING CONTEXT: "+mode,this::chooseMode));
+        brainStatus=text("Local LLM: no GGUF loaded",12,Color.rgb(110,185,255));
+        panel.addView(brainStatus);
+        addButton(button("IMPORT GGUF MODEL",this::pickModel));
+        addButton(button("PIN / MANAGE SAVED PLACES",this::managePlaces));
         addButton(button("GPS: TURN ON / REFRESH",this::startGps));
         addButton(button("MEMORIES / DELETE",this::showMemories));
         addButton(button("SHARE SAVED KNOWLEDGE",this::shareFacts));
@@ -204,6 +233,7 @@ public class MainActivity extends Activity implements LocationListener {
         refreshVoiceText();
         refreshRideText();
         refreshVoicePrintStatus();
+        updateBrainStatus();
         updateLocationLabel();
         refreshTalkButton();
         setStatus(active ? (speaking ? "TORQUE SPEAKING" : "MIC ON — LISTENING") : "MIC OFF — TAP TALK");
@@ -271,7 +301,8 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void sayOnce(String message) {
         if(tts==null||!ttsReady){setStatus("TEXT TO SPEECH NOT AVAILABLE");return;}
-        if(active && vosk!=null && vosk.listening()) vosk.pause(true);
+        // Keep Vosk listening during TTS only for explicit mute commands.
+        // Any other recognized speech while Torque speaks is discarded.
         if(active && recognizer!=null){
             listenGeneration++;
             recognizer.cancel();
@@ -300,6 +331,7 @@ public class MainActivity extends Activity implements LocationListener {
         }
         if(!ttsReady){setStatus("WAITING FOR TORQUE VOICE ENGINE — TRY AGAIN");return;}
         active=true;
+        sessionMuted=false;
         recognitionFailures=0;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         refreshTalkButton();
@@ -379,6 +411,8 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void stopConversation(){
         active=false;listening=false;speaking=false;
+        awaitingReply=false;
+        if(localBrain!=null)localBrain.interrupt();
         enrollingVoice=false;
         if(vosk!=null)vosk.stop();
         listenGeneration++;
@@ -411,6 +445,7 @@ public class MainActivity extends Activity implements LocationListener {
     }
     @Override public void onLocationChanged(Location location){
         currentFix=location;fixAt=SystemClock.elapsedRealtime();updateLocationLabel();
+        if(places!=null && foreground)places.sample(location, this::arrivedAtPlace);
     }
     private void updateLocationLabel(){
         if(gpsText==null)return;
@@ -518,10 +553,13 @@ public class MainActivity extends Activity implements LocationListener {
             return;
         }
         if(TorqueMode.stopNow(heard)){
+            sessionMuted=true;
+            if(localBrain!=null)localBrain.interrupt();
             stopConversation();
             transcript.setText("Torque muted. No last word.");
             return;
         }
+        if(speaking || awaitingReply)return;
         String requested=TorqueMode.command(heard);
         if(requested!=null){
             applyMode(requested,false);
@@ -534,6 +572,14 @@ public class MainActivity extends Activity implements LocationListener {
         boolean asGuest = ride.guestTurn() || (speakerProfile.enrolled()?uncertain:ride.hasGuests()) || passenger || TorqueMode.clean(mode);
         String presence = ride.hearPresence(heard);
         if (presence != null) refreshRideText();
+        if(localBrain!=null && localBrain.isReady() && !TorqueMode.quiet(mode)){
+            lastPrompt=heard;
+            awaitingReply=true;
+            String prompt=buildPrompt(heard,asGuest);
+            setStatus("OFFLINE AI THINKING");
+            localBrain.answer(prompt);
+            return;
+        }
         String specialized=contextReply.answer(heard,mode,asGuest);
         String reply=(presence!=null && !TorqueMode.clean(mode))?presence:(specialized!=null?specialized:(TorqueMode.privateSpace(mode)?torque.respond(heard,currentFix,fixAt,asGuest,quiet,ride):contextReply.answer("hello",mode,true)));
         if (TorqueMode.privateSpace(mode) && !asGuest && presence == null) memory.log(heard, reply);
@@ -621,6 +667,7 @@ public class MainActivity extends Activity implements LocationListener {
     }
     @Override protected void onDestroy(){
         stopConversation();
+        if(localBrain!=null){localBrain.release();localBrain=null;}
         if(vosk!=null){vosk.release();vosk=null;}
         if(tts!=null){tts.shutdown();tts=null;}
         if(memory!=null)memory.close();
