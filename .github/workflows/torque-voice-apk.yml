@@ -26,7 +26,7 @@ jobs:
           SDKMGR=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
           if [ -z "$SDKMGR" ]; then echo "Android sdkmanager unavailable"; exit 1; fi
           yes | "$SDKMGR" --licenses >/dev/null || true
-          "$SDKMGR" "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMGR" "platforms;android-36" "build-tools;36.0.0"
       - name: Bundle licensed offline Vosk models
         run: |
           set -euo pipefail
@@ -42,7 +42,7 @@ jobs:
           ls -lh torque-voice/app/src/main/assets/
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.13'
       - name: Compile installable Android APK
         run: gradle -p torque-voice --no-daemon --stacktrace :app:assembleDebug
       - name: Copy installable APK
