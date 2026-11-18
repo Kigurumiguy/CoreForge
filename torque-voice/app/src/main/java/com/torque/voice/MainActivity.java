@@ -57,6 +57,7 @@ public class MainActivity extends Activity implements LocationListener {
     private TorqueLocalBrain localBrain;
     private PlaceAwareness places;
     private TextView brainStatus;
+    private String offlineVoiceStatus="Offline voice not checked";
     private TextView audioProcessingStatus;
     private boolean allowBargeIn=true;
     private final VoiceTurnGate turnGate=new VoiceTurnGate();
@@ -199,6 +200,7 @@ public class MainActivity extends Activity implements LocationListener {
 
         addButton(button("■  STOP TALKING / MUTE MIC", this::stopConversation));
         addButton(button("SCREEN-OFF TORQUE • START",this::startScreenOffTorque));
+        addButton(button("MICHIGAN TRIP • OFFLINE READINESS",this::showTripReadiness));
         addButton(button("SCREEN-OFF TORQUE • STOP",this::stopScreenOffTorque));
         panel.addView(text("Screen-off session: explicit Start, persistent microphone notification, Stop anytime. Phone GPS/arrival awareness remains foreground-only.",11,Color.LTGRAY));
         addButton(button("🎤  CHOOSE TORQUE'S VOICE", this::chooseVoice));
@@ -264,7 +266,10 @@ public class MainActivity extends Activity implements LocationListener {
         tts = new TextToSpeech(this, code -> {
             ttsReady = code == TextToSpeech.SUCCESS;
             if (!ttsReady) { mainHandler.post(()->{setStatus("PHONE TTS UNAVAILABLE");refreshVoiceText();});return; }
-            tts.setLanguage(Locale.US);
+            OfflineVoicePolicy.Selection selected=OfflineVoicePolicy.apply(tts,prefs.getString("voice",""));
+            ttsReady=selected.ready;
+            offlineVoiceStatus=selected.status;
+            if(!ttsReady){mainHandler.post(()->{setStatus("OFFLINE TTS NOT READY");refreshVoiceText();});return;}
             tts.setPitch(pitch);
             tts.setSpeechRate(.97f);
             tts.setAudioAttributes(new AudioAttributes.Builder()
@@ -349,13 +354,18 @@ public class MainActivity extends Activity implements LocationListener {
     }
     private void refreshVoiceText(){
         if(voiceText==null)return;
-        if(!ttsReady){voiceText.setText("Voice: phone speech unavailable");return;}
+        if(!ttsReady){voiceText.setText("Voice: "+offlineVoiceStatus);return;}
         String saved=prefs.getString("voice","");
         for(Voice v:installedEnglishVoices()){
             if(v.getName().equals(saved)) {tts.setVoice(v);break;}
         }
         Voice actual=tts.getVoice();
-        voiceText.setText("Voice: "+(actual==null?"Default":actual.getName())+" • pitch "+pitch);
+        if(actual==null||actual.isNetworkConnectionRequired()){
+            ttsReady=false;offlineVoiceStatus="Selected voice requires a network connection";
+            voiceText.setText(offlineVoiceStatus);
+            return;
+        }
+        voiceText.setText("OFFLINE voice: "+actual.getName()+" • pitch "+pitch);
     }
 
     private void sayOnce(String message) {
@@ -389,7 +399,7 @@ public class MainActivity extends Activity implements LocationListener {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},MIC_REQUEST);
             return;
         }
-        if(!ttsReady){setStatus("WAITING FOR TORQUE VOICE ENGINE — TRY AGAIN");return;}
+        if(!ttsReady){setStatus("OFFLINE VOICE NOT READY — CHECK TRIP READINESS");return;}
         if(TorqueVoiceService.isRunning(this)){
             setStatus("STOP SCREEN-OFF TORQUE BEFORE FOREGROUND TALK");
             return;
@@ -605,6 +615,15 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void handleSpeech(String heard, org.json.JSONObject raw) {
         if (heard == null || heard.trim().isEmpty() || !active || !foreground) return;
+        String urgentDrivingResponse=DriveSafety.response(heard);
+        if(urgentDrivingResponse!=null && !enrollingVoice){
+            if(localBrain!=null)localBrain.interrupt();
+            awaitingReply=false;
+            turnGate.thinkingEnded();
+            transcript.setText("TORQUE • DRIVING CHECK-IN: "+urgentDrivingResponse);
+            sayOnce(urgentDrivingResponse);
+            return;
+        }
         if (enrollingVoice) {
             if (raw == null) {
                 enrollingVoice = false;
@@ -788,6 +807,27 @@ public class MainActivity extends Activity implements LocationListener {
             });
             vosk.prepare();
         }
+    }
+
+    private void showTripReadiness(){
+        StringBuilder statusText=new StringBuilder();
+        statusText.append("MICHIGAN TRIP OFFLINE CHECK\n\n");
+        statusText.append("PHONE VOICE: ").append(ttsReady?"OFFLINE-CAPABLE SELECTED":"NOT READY").append("\n");
+        statusText.append(offlineVoiceStatus).append("\n\n");
+        statusText.append("OFFLINE VOSK: ").append(vosk!=null&&vosk.ready()?"MODEL LOADED":"NOT YET READY").append("\n");
+        statusText.append("MIC: ").append(vosk!=null&&vosk.listening()?vosk.audioStatus():"Not recording now; start TALK for the mic test").append("\n\n");
+        statusText.append("OFFLINE AI: ").append(localBrain!=null&&localBrain.isReady()?"GGUF LOADED":"SCRIPTED FALLBACK ONLY").append("\n");
+        statusText.append("Offline chat without a downloaded GGUF is NOT full generative AI.\n\n");
+        String modelUri=prefs.getString("gguf_uri","");
+        statusText.append("GGUF FILE: ").append(modelUri.isEmpty()?"NO FILE SELECTED":"Previously selected (readability needs testing)").append("\n\n");
+        statusText.append("SCREEN-OFF MICROPHONE: ").append(TorqueVoiceService.isRunning(this)?"ACTIVE":"OFF — user-started only").append("\n");
+        statusText.append("PHONE CLOCK: ").append(java.time.ZonedDateTime.now().toString()).append("\n");
+        statusText.append("GPS: Not required for conversation; satellite reception varies.\n\n");
+        statusText.append("BEFORE TRAVEL: Park, switch to airplane mode (and keep the audio output connected), start Torque, talk, lock the screen and verify multiple exchanges. Reopen and check again. No phone endurance test has been completed by the developer.\n\n");
+        statusText.append("While driving, Torque is companionship, NOT a guarantee of staying awake. Stop and rest if sleepy. Keep the phone powered and avoid using the screen while driving.");
+        new AlertDialog.Builder(this).setTitle("TORQUE • Road Trip Readiness")
+            .setMessage(statusText.toString())
+            .setPositiveButton("Understood",null).show();
     }
 
     private void pickModel(){
