@@ -27,23 +27,36 @@ jobs:
           if [ -z "$SDKMGR" ]; then echo "Android sdkmanager unavailable"; exit 1; fi
           yes | "$SDKMGR" --licenses >/dev/null || true
           "$SDKMGR" "platforms;android-35" "build-tools;35.0.0"
+      - name: Bundle licensed offline Vosk models
+        run: |
+          set -euo pipefail
+          mkdir -p torque-voice/app/src/main/assets
+          curl -fL --retry 3 --retry-delay 3 --connect-timeout 25 --max-time 360 \
+            https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip \
+            -o torque-voice/app/src/main/assets/vosk-english.zip
+          curl -fL --retry 3 --retry-delay 3 --connect-timeout 25 --max-time 240 \
+            https://alphacephei.com/vosk/models/vosk-model-spk-0.4.zip \
+            -o torque-voice/app/src/main/assets/vosk-speaker.zip
+          unzip -tq torque-voice/app/src/main/assets/vosk-english.zip
+          unzip -tq torque-voice/app/src/main/assets/vosk-speaker.zip
+          ls -lh torque-voice/app/src/main/assets/
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
       - name: Compile installable Android APK
         run: gradle -p torque-voice --no-daemon --stacktrace :app:assembleDebug
       - name: Copy installable APK
-        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.3.apk
+        run: cp torque-voice/app/build/outputs/apk/debug/app-debug.apk Torque-Voice-0.4.apk
       - uses: actions/upload-artifact@v4
         with:
           name: TORQUE-Voice-APK
-          path: Torque-Voice-0.3.apk
+          path: Torque-Voice-0.4.apk
       - name: Publish direct APK download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view torque-voice-v0.3.0 >/dev/null 2>&1; then
-            gh release upload torque-voice-v0.3.0 Torque-Voice-0.3.apk --clobber
+          if gh release view torque-voice-v0.4.0 >/dev/null 2>&1; then
+            gh release upload torque-voice-v0.4.0 Torque-Voice-0.4.apk --clobber
           else
-            gh release create torque-voice-v0.3.0 Torque-Voice-0.3.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.3 — Android APK" --notes "Hands-free Torque Voice v0.3 APK with live phone time/date and explicit guest roster; not automatic speaker recognition. One tap starts an ongoing, foreground-only session with automatic re-listening after each response. Minimal dark display, phone GPS, local memories, phone TTS voices and on-device speech recognition when supported. Lightweight scripted dialogue; no GGUF model included. No background microphone. Test before driving."
+            gh release create torque-voice-v0.4.0 Torque-Voice-0.4.apk --target "${GITHUB_SHA}" --title "TORQUE Voice 0.4 — Android APK" --notes "Torque Voice v0.4 with bundled Vosk offline speech and speaker models, three sample local owner voice enrollment, uncertain voices treated as guests, local time and passenger roster. Voice matching is probabilistic, not a biometric security feature. Initial model unpacking requires private local storage and may take time. Foreground-only microphone, no account. Test in a parked car first. One tap starts an ongoing, foreground-only session with automatic re-listening after each response. Minimal dark display, phone GPS, local memories, phone TTS voices and on-device speech recognition when supported. Lightweight scripted dialogue; no GGUF model included. No background microphone. Test before driving."
           fi
