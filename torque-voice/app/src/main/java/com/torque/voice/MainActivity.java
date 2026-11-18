@@ -76,6 +76,7 @@ public class MainActivity extends Activity implements LocationListener {
         quiet = prefs.getBoolean("quiet", false);
         mode=TorqueMode.GUEST; // Fail closed on every app launch; never silently re-enter uncensored mode.
         memory = new MemoryDB(this);
+        memory.seedOwnerFacts(this);
         torque = new ScriptedTorque(memory);
         speakerProfile = new SpeakerProfile(this);
         vosk = new VoskController(this, new VoskController.Callbacks(){
@@ -192,6 +193,7 @@ public class MainActivity extends Activity implements LocationListener {
         addButton(button("SPEAKING CONTEXT: "+mode,this::chooseMode));
         addButton(button("GPS: TURN ON / REFRESH",this::startGps));
         addButton(button("MEMORIES / DELETE",this::showMemories));
+        addButton(button("SHARE SAVED KNOWLEDGE",this::shareFacts));
 
         TextView disclosure=text("Hands-free listening stays on between replies until you press Stop or leave the app. The screen stays awake while listening; Android may stop recognition if its speech service fails. Mic and GPS stop when you leave. No hidden mic, uploads, or ads. Requires installed offline speech recognition. Dialogue is lightweight and scripted.",11,Color.GRAY);
         panel.addView(disclosure);
@@ -578,6 +580,14 @@ public class MainActivity extends Activity implements LocationListener {
         }).setNegativeButton("Done",null).show();
     }
 
+    private void shareFacts() {
+        StringBuilder b=new StringBuilder("Torque local memories (exported by owner)\n");
+        for(String fact:memory.facts())b.append("\n").append(fact);
+        Intent send=new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_TEXT,b.toString());
+        startActivity(Intent.createChooser(send,"Export Torque notes"));
+    }
     private void showMemories(){
         List<String> facts=memory.facts();
         StringBuilder b=new StringBuilder("Built-in canon: You work at Waffle House; five years in January 2027.\n\nSaved memories:\n");
