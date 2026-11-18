@@ -38,6 +38,7 @@ public final class TorqueVoiceService extends Service {
     private static final int NOTIFICATION_ID=2031;
     private final Handler main=new Handler(Looper.getMainLooper());
 
+    private static volatile boolean SCREEN_OFF_ACTIVE=false;
     private boolean running=false;
     private boolean speaking=false;
     private boolean waitingForModel=false;
@@ -58,7 +59,7 @@ public final class TorqueVoiceService extends Service {
     private boolean holdsAudioFocus=false;
 
     static boolean isRunning(Context context){
-        return context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).getBoolean(KEY_RUNNING,false);
+        return SCREEN_OFF_ACTIVE;
     }
 
     @Override public void onCreate(){
@@ -93,6 +94,7 @@ public final class TorqueVoiceService extends Service {
         // Caller is the visible, user-confirmed Activity; never elevate context from GPS.
         mode=TorqueMode.normalize(intent.getStringExtra(EXTRA_MODE));
         running=true;
+        SCREEN_OFF_ACTIVE=true;
         getSharedPreferences(PREFS,MODE_PRIVATE).edit().putBoolean(KEY_RUNNING,true).apply();
         memory=new MemoryDB(this);
         scripted=new ScriptedTorque(memory);
@@ -300,6 +302,7 @@ public final class TorqueVoiceService extends Service {
 
     private void stopNow(){
         running=false;
+        SCREEN_OFF_ACTIVE=false;
         getSharedPreferences(PREFS,MODE_PRIVATE).edit().putBoolean(KEY_RUNNING,false).apply();
         waitingForModel=false; speaking=false;voiceReady=false;
         if(brain!=null){brain.release();brain=null;}
