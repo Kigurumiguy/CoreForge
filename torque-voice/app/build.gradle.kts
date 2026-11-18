@@ -10,8 +10,8 @@ android {
   minSdk = 26
   ndk { abiFilters += listOf("arm64-v8a","x86_64") }
   targetSdk = 35
-  versionCode = 7
-  versionName = "0.7.0"
+  versionCode = 8
+  versionName = "0.8.0"
  }
  compileOptions {
   sourceCompatibility = JavaVersion.VERSION_17
@@ -20,6 +20,7 @@ android {
 }
 
 dependencies {
+ testImplementation("junit:junit:4.13.2")
  implementation("com.alphacephei:vosk-android:0.3.75")
  implementation("io.github.ljcamargo:llamacpp-kotlin:0.4.0")
  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
