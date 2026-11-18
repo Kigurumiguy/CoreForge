@@ -8,7 +8,7 @@ final class DriveSafety {
 
     static boolean urgent(String said) {
         if(said==null)return false;
-        String s=said.toLowerCase(Locale.US).replaceAll("[^a-z0-9 ]"," ").replaceAll(" +"," ");
+        String s=said.toLowerCase(Locale.US).replace("'","").replaceAll("[^a-z0-9 ]"," ").replaceAll(" +"," ");
         return contains(s,"falling asleep")||contains(s,"about to fall asleep")||
             contains(s,"can't stay awake")||contains(s,"cannot stay awake")||
             contains(s,"cant stay awake")||contains(s,"nodding off")||
@@ -19,7 +19,7 @@ final class DriveSafety {
 
     static boolean tired(String said) {
         if(said==null)return false;
-        String s=said.toLowerCase(Locale.US).replaceAll("[^a-z0-9 ]"," ").replaceAll(" +"," ");
+        String s=said.toLowerCase(Locale.US).replace("'","").replaceAll("[^a-z0-9 ]"," ").replaceAll(" +"," ");
         return contains(s,"really sleepy")||contains(s,"getting sleepy")||
             contains(s,"so tired")||contains(s,"exhausted driving")||
             contains(s,"tired driving")||contains(s,"need to sleep");
