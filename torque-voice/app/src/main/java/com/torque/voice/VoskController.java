@@ -18,6 +18,7 @@ final class VoskController {
     interface Callbacks {
         void onReady();
         void onSpeech(String text, JSONObject result);
+        void onPartial(String text);
         void onError(String explanation);
     }
     private final Context context;
@@ -72,7 +73,13 @@ final class VoskController {
             paused=false;
             listening=true;
             service.startListening(new RecognitionListener(){
-                @Override public void onPartialResult(String result){}
+                @Override public void onPartialResult(String result){
+                    if(!listening || paused || disposed)return;
+                    try {
+                        String words=new JSONObject(result).optString("partial","").trim();
+                        if(!words.isEmpty())callbacks.onPartial(words);
+                    }catch(Exception ignored){}
+                }
                 @Override public void onResult(String result){ process(result); }
                 @Override public void onFinalResult(String result){ process(result); }
                 @Override public void onError(Exception e){
