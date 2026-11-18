@@ -40,6 +40,7 @@ public final class TorqueVoiceService extends Service {
 
     private static volatile boolean SCREEN_OFF_ACTIVE=false;
     private boolean running=false;
+    private final VoiceTurnGate turnGate=new VoiceTurnGate();
     private boolean speaking=false;
     private boolean waitingForModel=false;
     private boolean voiceReady=false;
@@ -136,11 +137,12 @@ public final class TorqueVoiceService extends Service {
                 @Override public void onDone(String id){main.post(()->{
                     if(!running)return;
                     speaking=false;
+                    turnGate.speechFinished(android.os.SystemClock.elapsedRealtime());
                     abandonAudioFocus();
                     updateNotification("Microphone ON • Listening for you");
                 });}
                 @Override public void onError(String id){main.post(()->{
-                    speaking=false;abandonAudioFocus();
+                    speaking=false;turnGate.speechFinished(android.os.SystemClock.elapsedRealtime());abandonAudioFocus();
                     if(running)updateNotification("Speech playback error • Listening");
                 });}
             });
@@ -153,6 +155,9 @@ public final class TorqueVoiceService extends Service {
             @Override public void onReady(){resumeListeningIfReady();}
             @Override public void onSpeech(String words,org.json.JSONObject result){
                 main.post(()->{if(running)onHeard(words,result);});
+            }
+            @Override public void onPartial(String words){
+                main.post(()->onPartialHeard(words));
             }
             @Override public void onError(String message){
                 main.post(()->{
@@ -174,6 +179,7 @@ public final class TorqueVoiceService extends Service {
             @Override public void answer(String reply,long millis,int tokens){
                 if(!running||!waitingForModel)return;
                 waitingForModel=false;
+                turnGate.thinkingEnded();
                 String text=reply.trim();
                 if(text.isEmpty())text=scripted.respond(lastWords,null,0L,false,false,ride);
                 speak(text);
@@ -181,6 +187,7 @@ public final class TorqueVoiceService extends Service {
             @Override public void failed(String reason){
                 if(!running||!waitingForModel)return;
                 waitingForModel=false;
+                turnGate.thinkingEnded();
                 speak(scripted.respond(lastWords,null,0L,false,false,ride));
             }
         });
@@ -197,9 +204,19 @@ public final class TorqueVoiceService extends Service {
         if(vosk.listening())updateNotification("Microphone ON • Screen-off listening");
     }
 
+    private void onPartialHeard(String words){
+        if(!running)return;
+        if(turnGate.evaluate(words,true,android.os.SystemClock.elapsedRealtime())==VoiceTurnGate.Decision.STOP){
+            stopNow();
+            stopSelf();
+        }
+    }
+
     private void onHeard(String words,org.json.JSONObject raw){
         if(words==null||words.trim().isEmpty())return;
-        if(TorqueMode.stopNow(words)){
+        VoiceTurnGate.Decision decision=turnGate.evaluate(words,false,android.os.SystemClock.elapsedRealtime());
+        if(decision==VoiceTurnGate.Decision.IGNORE)return;
+        if(decision==VoiceTurnGate.Decision.STOP){
             // Stop is handled even during TTS. No "last word" gag.
             stopNow();stopSelf();return;
         }
@@ -221,6 +238,7 @@ public final class TorqueVoiceService extends Service {
         String presence=ride.hearPresence(words);
         if(TorqueMode.privateSpace(mode)&&!guest&&presence==null&&brain!=null&&brain.isReady()){
             waitingForModel=true;
+            turnGate.thinkingStarted();
             updateNotification("Microphone ON • Offline AI thinking");
             brain.answer(buildPrompt(words));
             return;
@@ -249,6 +267,7 @@ public final class TorqueVoiceService extends Service {
         if(!running||!voiceReady||tts==null||text==null||text.isEmpty())return;
         requestAudioFocus();
         speaking=true;
+        turnGate.speechStarted(text,android.os.SystemClock.elapsedRealtime());
         updateNotification("Torque speaking • Say 'Torque, enough' to stop");
         tts.speak(text,TextToSpeech.QUEUE_FLUSH,null,"screen-off-"+(++utterance));
     }
@@ -305,6 +324,7 @@ public final class TorqueVoiceService extends Service {
         SCREEN_OFF_ACTIVE=false;
         getSharedPreferences(PREFS,MODE_PRIVATE).edit().putBoolean(KEY_RUNNING,false).apply();
         waitingForModel=false; speaking=false;voiceReady=false;
+        turnGate.stop();
         if(brain!=null){brain.release();brain=null;}
         if(vosk!=null){vosk.release();vosk=null;}
         if(tts!=null){tts.stop();tts.shutdown();tts=null;}
