@@ -62,6 +62,8 @@ public class MainActivity extends Activity implements LocationListener {
     private boolean sessionMuted=false;
     private String lastPrompt="";
     private static final int MODEL_PICKER=204;
+    private static final int BACKGROUND_MIC_REQUEST=205;
+    private static final int NOTIFICATION_REQUEST=206;
     private String mode=TorqueMode.GUEST;
     private SpeakerProfile speakerProfile;
     private VoskController vosk;
@@ -186,6 +188,9 @@ public class MainActivity extends Activity implements LocationListener {
         addButton(talkButton);
 
         addButton(button("■  STOP TALKING / MUTE MIC", this::stopConversation));
+        addButton(button("SCREEN-OFF TORQUE • START",this::startScreenOffTorque));
+        addButton(button("SCREEN-OFF TORQUE • STOP",this::stopScreenOffTorque));
+        panel.addView(text("Screen-off session: explicit Start, persistent microphone notification, Stop anytime. Phone GPS/arrival awareness remains foreground-only.",11,Color.LTGRAY));
         addButton(button("🎤  CHOOSE TORQUE'S VOICE", this::chooseVoice));
 
         rideText = text(ride.summary(),12,Color.rgb(110,185,255));
@@ -332,6 +337,10 @@ public class MainActivity extends Activity implements LocationListener {
             return;
         }
         if(!ttsReady){setStatus("WAITING FOR TORQUE VOICE ENGINE — TRY AGAIN");return;}
+        if(TorqueVoiceService.isRunning(this)){
+            setStatus("STOP SCREEN-OFF TORQUE BEFORE FOREGROUND TALK");
+            return;
+        }
         active=true;
         sessionMuted=false;
         recognitionFailures=0;
@@ -644,6 +653,67 @@ public class MainActivity extends Activity implements LocationListener {
         else brainStatus.setText("Local LLM: import a GGUF file • scripted fallback is active");
     }
 
+
+    private void startScreenOffTorque(){
+        if(TorqueVoiceService.isRunning(this)){
+            setStatus("SCREEN-OFF SESSION ALREADY STARTED");
+            return;
+        }
+        // Foreground microphone permission must be granted while the Activity is visible.
+        if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},BACKGROUND_MIC_REQUEST);
+            return;
+        }
+        if(Build.VERSION.SDK_INT>=33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},NOTIFICATION_REQUEST);
+            return;
+        }
+        new AlertDialog.Builder(this).setTitle("Start screen-off Torque?")
+            .setMessage("You are explicitly enabling microphone listening after locking the screen. Android will show an ongoing Torque notification with a STOP button. Keep the phone charged. This experimental service starts only now, never on boot, and does not track GPS in the background. To keep everyone comfortable, the selected speaking context remains in effect. Unknown speakers default to polite conversation.")
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Start listening",(d,i)->{
+                stopConversation();
+                // A single speech recognizer at a time: release the Activity microphone pipeline.
+                if(vosk!=null){vosk.release();vosk=null;}
+                Intent intent=new Intent(this,TorqueVoiceService.class)
+                    .setAction(TorqueVoiceService.ACTION_START)
+                    .putExtra(TorqueVoiceService.EXTRA_MODE,mode);
+                try{
+                    if(Build.VERSION.SDK_INT>=26) startForegroundService(intent);
+                    else startService(intent);
+                    setStatus("SCREEN-OFF SESSION REQUESTED — CHECK NOTIFICATION");
+                    transcript.setText("TORQUE SCREEN-OFF: If the ongoing microphone notification appears, you can turn off the display. Tap STOP TORQUE in that notification to end the session. To return to foreground microphone, stop the service and reopen this app.");
+                }catch(RuntimeException unavailable){
+                    setStatus("ANDROID BLOCKED BACKGROUND MICROPHONE START");
+                    transcript.setText("Start failed: "+unavailable.getClass().getSimpleName()+". Try again while Torque is visible.");
+                }
+            }).show();
+    }
+
+    private void stopScreenOffTorque(){
+        Intent intent=new Intent(this,TorqueVoiceService.class).setAction(TorqueVoiceService.ACTION_STOP);
+        try{
+            startService(intent);
+        }catch(RuntimeException e){
+            stopService(new Intent(this,TorqueVoiceService.class));
+        }
+        setStatus("SCREEN-OFF STOP REQUESTED");
+        transcript.setText("Torque screen-off microphone stop requested. Check that the notification disappears.");
+        if(vosk==null){
+            vosk=new VoskController(this,new VoskController.Callbacks(){
+                @Override public void onReady(){refreshVoicePrintStatus();}
+                @Override public void onSpeech(String words,org.json.JSONObject result){
+                    mainHandler.post(()->{if(active&&foreground)handleSpeech(words,result);});
+                }
+                @Override public void onError(String explanation){
+                    mainHandler.post(()->setStatus(explanation));
+                }
+            });
+            vosk.prepare();
+        }
+    }
+
     private void pickModel(){
         if(active)stopConversation();
         new AlertDialog.Builder(this).setTitle("Real offline AI brain")
@@ -798,6 +868,12 @@ public class MainActivity extends Activity implements LocationListener {
         super.onRequestPermissionsResult(request,perms,grant);
         boolean ok=grant.length>0 && grant[0]==PackageManager.PERMISSION_GRANTED;
         if(request==MIC_REQUEST){if(ok)startConversation();else setStatus("MIC PERMISSION DENIED");}
+        if(request==BACKGROUND_MIC_REQUEST){
+            if(ok)startScreenOffTorque();else setStatus("SCREEN-OFF MICROPHONE PERMISSION DENIED");
+        }
+        if(request==NOTIFICATION_REQUEST){
+            if(ok)startScreenOffTorque();else setStatus("NOTIFICATIONS DISABLED — CANNOT START THIS EXPERIMENTAL SCREEN-OFF MODE");
+        }
         if(request==GPS_REQUEST){if(ok)startGps();else gpsText.setText("GPS PERMISSION DENIED");}
     }
     @Override protected void onStart(){super.onStart();foreground=true;}
