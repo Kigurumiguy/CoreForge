@@ -52,6 +52,8 @@ public class MainActivity extends Activity implements LocationListener {
     private float pitch = 0.87f;
     private MemoryDB memory;
     private ScriptedTorque torque;
+    private final TorqueContext contextReply=new TorqueContext();
+    private String mode=TorqueMode.GUEST;
     private SpeakerProfile speakerProfile;
     private VoskController vosk;
     private boolean enrollingVoice = false;
@@ -72,6 +74,7 @@ public class MainActivity extends Activity implements LocationListener {
         pitch = prefs.getFloat("pitch", 0.87f);
         passenger = prefs.getBoolean("passenger", false);
         quiet = prefs.getBoolean("quiet", false);
+        mode=TorqueMode.normalize(prefs.getString("privacy_mode",TorqueMode.GUEST));
         memory = new MemoryDB(this);
         torque = new ScriptedTorque(memory);
         speakerProfile = new SpeakerProfile(this);
@@ -81,14 +84,10 @@ public class MainActivity extends Activity implements LocationListener {
                 refreshVoicePrintStatus();
             }
             @Override public void onSpeech(String words, org.json.JSONObject result) {
-                if(active && foreground) handleSpeech(words,result);
+                mainHandler.post(()->{if(active && foreground)handleSpeech(words,result);});
             }
             @Override public void onError(String explanation) {
-                if(!active)setStatus(explanation);
-                else if(vosk!=null && vosk.listening()){
-                    stopConversation();
-                    setStatus(explanation);
-                }
+                mainHandler.post(()->{if(!active)setStatus(explanation);else if(vosk!=null && vosk.listening()){stopConversation();setStatus(explanation);}});
             }
         });
         makeScreen();
@@ -190,6 +189,7 @@ public class MainActivity extends Activity implements LocationListener {
             }).show();
         }));
 
+        addButton(button("SPEAKING CONTEXT: "+mode,this::chooseMode));
         addButton(button("GPS: TURN ON / REFRESH",this::startGps));
         addButton(button("MEMORIES / DELETE",this::showMemories));
 
@@ -467,6 +467,29 @@ public class MainActivity extends Activity implements LocationListener {
             .setNegativeButton("Cancel",null).show();
     }
 
+    private void chooseMode(){
+        new AlertDialog.Builder(this).setTitle("Torque speaking context").setItems(TorqueMode.ALL,(d,i)->applyMode(TorqueMode.ALL[i],true)).show();
+    }
+    private void applyMode(String next,boolean approved){
+        if(TorqueMode.privateSpace(next)&&!approved){
+            transcript.setText("Private mode requires confirmation on your phone. Until then I will behave.");
+            setStatus("CONFIRM PRIVATE MODE IN SETTINGS");
+            return;
+        }
+        if(TorqueMode.privateSpace(next)){
+            new AlertDialog.Builder(this).setTitle("Confirm private conversation")
+                .setMessage("Only enable uncensored Torque when no children, customers, or unwilling guests can overhear.")
+                .setNegativeButton("Stay in safe mode",null)
+                .setPositiveButton("I'm in private",(d,i)->commitMode(next)).show();
+        }else commitMode(next);
+    }
+    private void commitMode(String next){
+        mode=TorqueMode.normalize(next);
+        prefs.edit().putString("privacy_mode",mode).apply();
+        rebuildButtons();
+        transcript.setText("Context: "+mode);
+    }
+
     private void handleSpeech(String heard, org.json.JSONObject raw) {
         if (heard == null || heard.trim().isEmpty() || !active || !foreground) return;
         if (enrollingVoice) {
@@ -492,21 +515,26 @@ public class MainActivity extends Activity implements LocationListener {
             }
             return;
         }
-        String low = heard.trim().toLowerCase(Locale.US);
-        if (low.equals("stop torque") || low.equals("mute torque") ||
-            low.equals("torque stop listening")) {
+        if(TorqueMode.stopNow(heard)){
             stopConversation();
+            transcript.setText("Torque muted. No last word.");
+            return;
+        }
+        String requested=TorqueMode.command(heard);
+        if(requested!=null){
+            applyMode(requested,false);
+            if(!TorqueMode.privateSpace(requested)&&ttsReady)sayOnce("Okay, "+mode+" mode.");
             return;
         }
         boolean likelyOwner = raw != null && speakerProfile.enrolled() &&
             speakerProfile.classify(raw) == SpeakerProfile.Identity.OWNER;
         boolean uncertain = speakerProfile.enrolled() && !likelyOwner;
-        boolean asGuest = ride.guestTurn() || uncertain || passenger;
+        boolean asGuest = ride.guestTurn() || uncertain || passenger || TorqueMode.clean(mode);
         String presence = ride.hearPresence(heard);
         if (presence != null) refreshRideText();
-        String reply = presence != null ? presence :
-            torque.respond(heard, currentFix, fixAt, asGuest, quiet, ride);
-        if (!asGuest && presence == null) memory.log(heard, reply);
+        String specialized=contextReply.answer(heard,mode,asGuest);
+        String reply=presence!=null?presence:(specialized!=null?specialized:(TorqueMode.privateSpace(mode)?torque.respond(heard,currentFix,fixAt,asGuest,quiet,ride):contextReply.answer("hello",mode,true)));
+        if (TorqueMode.privateSpace(mode) && !asGuest && presence == null) memory.log(heard, reply);
         String speaker = likelyOwner ? "LIKELY OWNER" : uncertain ? "UNKNOWN / GUEST" :
             asGuest ? "GUEST (MANUAL)" : "NOT VOICE-VERIFIED";
         transcript.setText(speaker + ": " + heard + "\n\nTORQUE: " + reply);
