@@ -58,6 +58,7 @@ public class MainActivity extends Activity implements LocationListener {
     private PlaceAwareness places;
     private TextView brainStatus;
     private boolean allowBargeIn=true;
+    private final VoiceTurnGate turnGate=new VoiceTurnGate();
     private boolean awaitingReply=false;
     private boolean sessionMuted=false;
     private String lastPrompt="";
@@ -98,6 +99,7 @@ public class MainActivity extends Activity implements LocationListener {
             }
             @Override public void answer(String result,long ms,int tokens){
                 awaitingReply=false;
+                turnGate.thinkingEnded();
                 if(!active || !foreground || sessionMuted)return;
                 String spoken=result.trim();
                 if(spoken.isEmpty()){handleBrainFailure("Empty model response");return;}
@@ -113,6 +115,9 @@ public class MainActivity extends Activity implements LocationListener {
             }
             @Override public void onSpeech(String words, org.json.JSONObject result) {
                 mainHandler.post(()->{if(active && foreground)handleSpeech(words,result);});
+            }
+            @Override public void onPartial(String words){
+                mainHandler.post(()->onPartialSpeech(words));
             }
             @Override public void onError(String explanation) {
                 mainHandler.post(()->{if(!active)setStatus(explanation);else if(vosk!=null && vosk.listening()){stopConversation();setStatus(explanation);}});
@@ -258,12 +263,13 @@ public class MainActivity extends Activity implements LocationListener {
                 .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
             tts.setOnUtteranceProgressListener(new UtteranceProgressListener(){
-                @Override public void onStart(String id){mainHandler.post(()->{speaking=true;setStatus("TORQUE SPEAKING");});}
+                @Override public void onStart(String id){mainHandler.post(()->{if(!active)return;speaking=true;setStatus("TORQUE SPEAKING");});}
                 @Override public void onDone(String id){mainHandler.post(()->{
                     speaking=false;
+                    turnGate.speechFinished(SystemClock.elapsedRealtime());
                     if(active && foreground)mainHandler.postDelayed(()->beginListening(),650);
                 });}
-                @Override public void onError(String id){mainHandler.post(()->{speaking=false;setStatus("TTS ERROR — CHECK VOICE");});}
+                @Override public void onError(String id){mainHandler.post(()->{speaking=false;turnGate.speechFinished(SystemClock.elapsedRealtime());setStatus("TTS ERROR — CHECK VOICE");if(active)beginListening();});}
             });
             mainHandler.post(()->refreshVoiceText());
         });
@@ -320,6 +326,7 @@ public class MainActivity extends Activity implements LocationListener {
         }
         tts.stop();
         speaking=true;
+        turnGate.speechStarted(message,SystemClock.elapsedRealtime());
         tts.speak(message,TextToSpeech.QUEUE_FLUSH,null,"torque-"+(++nextUtterance));
     }
 
@@ -343,6 +350,7 @@ public class MainActivity extends Activity implements LocationListener {
             return;
         }
         active=true;
+        turnGate.stop();
         sessionMuted=false;
         recognitionFailures=0;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -423,6 +431,7 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void stopConversation(){
         active=false;listening=false;speaking=false;
+        turnGate.stop();
         awaitingReply=false;
         if(localBrain!=null)localBrain.interrupt();
         enrollingVoice=false;
@@ -539,6 +548,16 @@ public class MainActivity extends Activity implements LocationListener {
         transcript.setText("Context: "+mode);
     }
 
+    private void onPartialSpeech(String words){
+        if(!active || !foreground || enrollingVoice)return;
+        if(turnGate.evaluate(words,true,SystemClock.elapsedRealtime())==VoiceTurnGate.Decision.STOP){
+            sessionMuted=true;
+            if(localBrain!=null)localBrain.interrupt();
+            stopConversation();
+            transcript.setText("Torque muted immediately. No last word.");
+        }
+    }
+
     private void handleSpeech(String heard, org.json.JSONObject raw) {
         if (heard == null || heard.trim().isEmpty() || !active || !foreground) return;
         if (enrollingVoice) {
@@ -564,7 +583,9 @@ public class MainActivity extends Activity implements LocationListener {
             }
             return;
         }
-        if(TorqueMode.stopNow(heard)){
+        VoiceTurnGate.Decision turn=turnGate.evaluate(heard,false,SystemClock.elapsedRealtime());
+        if(turn==VoiceTurnGate.Decision.IGNORE)return;
+        if(turn==VoiceTurnGate.Decision.STOP){
             sessionMuted=true;
             if(localBrain!=null)localBrain.interrupt();
             stopConversation();
@@ -587,6 +608,7 @@ public class MainActivity extends Activity implements LocationListener {
         if(localBrain!=null && localBrain.isReady() && TorqueMode.privateSpace(mode) && !asGuest && !TorqueMode.quiet(mode)){
             lastPrompt=heard;
             awaitingReply=true;
+            turnGate.thinkingStarted();
             String prompt=buildPrompt(heard,asGuest);
             setStatus("OFFLINE AI THINKING");
             localBrain.answer(prompt);
@@ -709,6 +731,9 @@ public class MainActivity extends Activity implements LocationListener {
                 @Override public void onSpeech(String words,org.json.JSONObject result){
                     mainHandler.post(()->{if(active&&foreground)handleSpeech(words,result);});
                 }
+                @Override public void onPartial(String words){
+                    mainHandler.post(()->onPartialSpeech(words));
+                }
                 @Override public void onError(String explanation){
                     mainHandler.post(()->setStatus(explanation));
                 }
@@ -772,6 +797,7 @@ public class MainActivity extends Activity implements LocationListener {
 
     private void handleBrainFailure(String reason){
         awaitingReply=false;
+        turnGate.thinkingEnded();
         setStatus("LOCAL AI FALLBACK — "+reason);
         if(!active || !foreground || sessionMuted)return;
         String reply=torque.respond(lastPrompt,currentFix,fixAt,false,false,ride);
